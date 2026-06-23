@@ -186,17 +186,21 @@ class ArtifactPathSafetyTests(unittest.TestCase):
 
 
 class DeferredToolsReturnErrorTests(unittest.TestCase):
-    def test_propose_analysis_plan_deferred(self) -> None:
+    def test_propose_analysis_plan_implemented(self) -> None:
+        """Phase 5: propose_analysis_plan is now implemented; verify basic success path."""
+        import tempfile
         from chemometrics_contracts import DatasetInspection, ProposeAnalysisPlanRequest
         from chemometrics_mcp.tools import propose_analysis_plan
 
         req = ProposeAnalysisPlanRequest(
             dataset_inspection=DatasetInspection(sample_count=10, feature_count=50)
         )
-        resp = propose_analysis_plan.run(req)
-        self.assertFalse(resp.ok)
-        self.assertIsNotNone(resp.error)
-        self.assertIn("not yet implemented", resp.error)
+        with tempfile.TemporaryDirectory() as tmp:
+            resp = propose_analysis_plan.run(req, runs_root=tmp)
+        # No label columns → unsupervised_exploration → ok=True
+        self.assertTrue(resp.ok)
+        self.assertIsNotNone(resp.payload)
+        self.assertEqual(resp.payload.task_name, "unsupervised_exploration")
 
     def test_validate_results_deferred(self) -> None:
         from chemometrics_contracts import ValidateResultsRequest
