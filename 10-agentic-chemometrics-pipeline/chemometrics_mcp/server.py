@@ -314,14 +314,24 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         return _tool_result(propose_analysis_plan.run(request))
 
     if name == "run_analysis":
-        return _tool_result(
-            ToolResponse(
-                tool_name="run_analysis",
-                ok=False,
-                error="Tool not yet implemented (Phase 6 target).",
-                message="run_analysis is deferred. See IMPLEMENTATION-PLAN.md Phase 6.",
-            )
+        from chemometrics_mcp.tools.run_analysis import _spectral_dataset_from_dict
+        from chemometrics_contracts import SpectralDataset, AnalysisPlan
+
+        dataset = _spectral_dataset_from_dict(arguments["dataset"])
+        raw_plan = arguments["approved_plan"]
+        plan = AnalysisPlan(
+            task_name=raw_plan.get("task_name"),
+            preprocessing_candidates=tuple(raw_plan.get("preprocessing_candidates", [])),
+            validation_strategy=raw_plan.get("validation_strategy"),
+            model_families=tuple(raw_plan.get("model_families", [])),
+            human_readable_plan=raw_plan.get("human_readable_plan"),
         )
+        request = RunAnalysisRequest(
+            dataset=dataset,
+            approved_plan=plan,
+            run_id=arguments.get("run_id"),
+        )
+        return _tool_result(run_analysis.run(request, runs_root=_RUNS_ROOT))
 
     if name == "validate_results":
         return _tool_result(
