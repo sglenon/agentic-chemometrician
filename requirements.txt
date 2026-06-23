@@ -20,5 +20,11 @@ seaborn
 # Notebook tooling
 nbformat
 
+# MCP server (10-agentic-chemometrics-pipeline)
+mcp
+
+# Testing
+pytest
+
 # LLM sub-project (09-can-llms-be-used-for-chemometrics)
 langchain
