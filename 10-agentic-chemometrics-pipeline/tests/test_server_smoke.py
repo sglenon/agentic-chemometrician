@@ -202,21 +202,29 @@ class DeferredToolsReturnErrorTests(unittest.TestCase):
         self.assertIsNotNone(resp.payload)
         self.assertEqual(resp.payload.task_name, "unsupervised_exploration")
 
-    def test_validate_results_deferred(self) -> None:
+    def test_validate_results_no_results(self) -> None:
+        """validate_results is now implemented (Phase 7). Empty request returns ok=False."""
         from chemometrics_contracts import ValidateResultsRequest
         from chemometrics_mcp.tools import validate_results
 
         resp = validate_results.run(ValidateResultsRequest())
         self.assertFalse(resp.ok)
-        self.assertIn("not yet implemented", resp.error)
+        self.assertIn("No results", resp.error)
 
-    def test_generate_report_deferred(self) -> None:
+    def test_generate_report_implemented(self) -> None:
+        """generate_report is now implemented (Phase 6b). Verify it returns ok=True."""
+        import tempfile
+        from pathlib import Path
         from chemometrics_contracts import AnalysisRun, GenerateReportRequest
         from chemometrics_mcp.tools import generate_report
 
-        resp = generate_report.run(GenerateReportRequest(analysis_run=AnalysisRun()))
-        self.assertFalse(resp.ok)
-        self.assertIn("not yet implemented", resp.error)
+        with tempfile.TemporaryDirectory() as tmp:
+            resp = generate_report.run(
+                GenerateReportRequest(analysis_run=AnalysisRun()),
+                runs_root=Path(tmp),
+            )
+        self.assertTrue(resp.ok)
+        self.assertIsNotNone(resp.payload)
 
 
 if __name__ == "__main__":

@@ -334,24 +334,76 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         return _tool_result(run_analysis.run(request, runs_root=_RUNS_ROOT))
 
     if name == "validate_results":
-        return _tool_result(
-            ToolResponse(
-                tool_name="validate_results",
-                ok=False,
-                error="Tool not yet implemented (Phase 7 target).",
-                message="validate_results is deferred. See IMPLEMENTATION-PLAN.md Phase 7.",
+        from chemometrics_contracts import AnalysisResult, ValidationWarning, SpectralDataset
+        from chemometrics_mcp.tools.run_analysis import _spectral_dataset_from_dict
+
+        raw_results = arguments.get("results", [])
+        results = tuple(
+            AnalysisResult(
+                task_name=r.get("task_name", ""),
+                model_name=r.get("model_name", ""),
+                preprocessing=tuple(r.get("preprocessing", [])),
+                metrics=dict(r.get("metrics", {})),
+                warnings=tuple(
+                    ValidationWarning(code=w["code"], message=w["message"],
+                        category=w.get("category", "validation"),
+                        severity=w.get("severity", "warning"))
+                    for w in r.get("warnings", [])
+                ),
             )
+            for r in raw_results
         )
+        dataset = None
+        if arguments.get("dataset"):
+            dataset = _spectral_dataset_from_dict(arguments["dataset"])
+
+        request = ValidateResultsRequest(results=results, dataset=dataset)
+        return _tool_result(validate_results.run(request, runs_root=_RUNS_ROOT))
 
     if name == "select_best_model":
-        return _tool_result(
-            ToolResponse(
-                tool_name="select_best_model",
-                ok=False,
-                error="Tool not yet implemented (Phase 8 target).",
-                message="select_best_model is deferred. See IMPLEMENTATION-PLAN.md Phase 8.",
+        from chemometrics_contracts import AnalysisResult, ValidationWarning, ValidationSummary
+
+        raw_results = arguments.get("results", [])
+        results = tuple(
+            AnalysisResult(
+                task_name=r.get("task_name", ""),
+                model_name=r.get("model_name", ""),
+                metrics=dict(r.get("metrics", {})),
+                selected_features=tuple(r.get("selected_features", [])),
+                warnings=tuple(
+                    ValidationWarning(
+                        code=w["code"],
+                        message=w["message"],
+                        category=w.get("category", "validation"),
+                        severity=w.get("severity", "warning"),
+                    )
+                    for w in r.get("warnings", [])
+                ),
             )
+            for r in raw_results
         )
+        raw_vs = arguments.get("validation_summary")
+        validation_summary = None
+        if raw_vs:
+            validation_summary = ValidationSummary(
+                passed=raw_vs.get("passed"),
+                checks=dict(raw_vs.get("checks", {})),
+                warnings=tuple(
+                    ValidationWarning(
+                        code=w["code"],
+                        message=w["message"],
+                        category=w.get("category", "validation"),
+                        severity=w.get("severity", "warning"),
+                    )
+                    for w in raw_vs.get("warnings", [])
+                ),
+            )
+        request = SelectBestModelRequest(
+            results=results,
+            validation_summary=validation_summary,
+            task_name=arguments.get("task_name"),
+        )
+        return _tool_result(select_best_model.run(request, runs_root=_RUNS_ROOT))
 
     if name == "recommend_next_model":
         request = RecommendNextModelRequest(
@@ -359,27 +411,177 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             failure_reason=arguments["failure_reason"],
             candidate_models=tuple(arguments.get("candidate_models", [])),
         )
-        return _tool_result(recommend_next_model.run(request))
+        return _tool_result(recommend_next_model.run(request, runs_root=_RUNS_ROOT))
 
     if name == "interpret_results":
-        return _tool_result(
-            ToolResponse(
-                tool_name="interpret_results",
-                ok=False,
-                error="Tool not yet implemented (Phase 8 target).",
-                message="interpret_results is deferred. See IMPLEMENTATION-PLAN.md Phase 8.",
+        from chemometrics_contracts import AnalysisResult, ValidationWarning, ValidationSummary
+        from chemometrics_mcp.tools.run_analysis import _spectral_dataset_from_dict
+
+        raw_results = arguments.get("results", [])
+        results = tuple(
+            AnalysisResult(
+                task_name=r.get("task_name", ""),
+                model_name=r.get("model_name", ""),
+                metrics=dict(r.get("metrics", {})),
+                selected_features=tuple(r.get("selected_features", [])),
+                warnings=tuple(
+                    ValidationWarning(
+                        code=w["code"],
+                        message=w["message"],
+                        category=w.get("category", "validation"),
+                        severity=w.get("severity", "warning"),
+                    )
+                    for w in r.get("warnings", [])
+                ),
             )
+            for r in raw_results
         )
+        dataset = None
+        if arguments.get("dataset"):
+            dataset = _spectral_dataset_from_dict(arguments["dataset"])
+        raw_vs = arguments.get("validation_summary")
+        validation_summary = None
+        if raw_vs:
+            validation_summary = ValidationSummary(
+                passed=raw_vs.get("passed"),
+                checks=dict(raw_vs.get("checks", {})),
+                warnings=tuple(
+                    ValidationWarning(
+                        code=w["code"],
+                        message=w["message"],
+                        category=w.get("category", "validation"),
+                        severity=w.get("severity", "warning"),
+                    )
+                    for w in raw_vs.get("warnings", [])
+                ),
+            )
+        request = InterpretResultsRequest(
+            results=results,
+            dataset=dataset,
+            validation_summary=validation_summary,
+        )
+        return _tool_result(interpret_results.run(request, runs_root=_RUNS_ROOT))
 
     if name == "generate_report":
-        return _tool_result(
-            ToolResponse(
-                tool_name="generate_report",
-                ok=False,
-                error="Tool not yet implemented (Phase 10 target).",
-                message="generate_report is deferred. See IMPLEMENTATION-PLAN.md Phase 10.",
-            )
+        from chemometrics_contracts import (
+            AnalysisResult,
+            RunMetadata,
+            InterpretationSummary,
         )
+
+        def _analysis_run_from_dict(d: dict) -> AnalysisRun:
+            """Reconstruct a nested AnalysisRun from a JSON dict."""
+
+            def _warning_from_dict(w: dict) -> ValidationWarning:
+                from chemometrics_contracts import ValidationWarning as VW
+                return VW(
+                    code=w["code"],
+                    message=w["message"],
+                    category=w.get("category", "validation"),
+                    severity=w.get("severity", "warning"),
+                    affected_stage=w.get("affected_stage"),
+                )
+
+            def _artifact_ref_from_dict(a: dict) -> ArtifactReference:
+                return ArtifactReference(
+                    kind=a["kind"],
+                    uri=a["uri"],
+                    label=a.get("label"),
+                    mime_type=a.get("mime_type"),
+                    description=a.get("description"),
+                )
+
+            def _run_metadata_from_dict(m: dict | None) -> RunMetadata | None:
+                if m is None:
+                    return None
+                return RunMetadata(
+                    run_id=m["run_id"],
+                    tool_name=m["tool_name"],
+                    dataset_id=m.get("dataset_id"),
+                    status=m.get("status"),
+                    created_at=m.get("created_at"),
+                    parameters=dict(m.get("parameters", {})),
+                )
+
+            def _analysis_result_from_dict(r: dict) -> AnalysisResult:
+                return AnalysisResult(
+                    task_name=r["task_name"],
+                    model_name=r["model_name"],
+                    preprocessing=tuple(r.get("preprocessing", [])),
+                    metrics=dict(r.get("metrics", {})),
+                    predictions=tuple(r.get("predictions", [])),
+                    selected_features=tuple(r.get("selected_features", [])),
+                    figures=tuple(
+                        _artifact_ref_from_dict(f) for f in r.get("figures", [])
+                    ),
+                    warnings=tuple(
+                        _warning_from_dict(w) for w in r.get("warnings", [])
+                    ),
+                    interpretation=r.get("interpretation"),
+                    run_metadata=_run_metadata_from_dict(r.get("run_metadata")),
+                )
+
+            return AnalysisRun(
+                run_metadata=_run_metadata_from_dict(d.get("run_metadata")),
+                results=tuple(
+                    _analysis_result_from_dict(r) for r in d.get("results", [])
+                ),
+                failed_models=tuple(d.get("failed_models", [])),
+                warnings=tuple(
+                    _warning_from_dict(w) for w in d.get("warnings", [])
+                ),
+                artifacts=tuple(
+                    _artifact_ref_from_dict(a) for a in d.get("artifacts", [])
+                ),
+            )
+
+        raw_run = arguments["analysis_run"]
+        analysis_run = _analysis_run_from_dict(raw_run)
+
+        raw_vs = arguments.get("validation_summary")
+        validation_summary = None
+        if raw_vs:
+            from chemometrics_contracts import ValidationWarning as VW
+            validation_summary = ValidationSummary(
+                passed=raw_vs.get("passed"),
+                checks=dict(raw_vs.get("checks", {})),
+                warnings=tuple(
+                    VW(
+                        code=w["code"],
+                        message=w["message"],
+                        category=w.get("category", "validation"),
+                        severity=w.get("severity", "warning"),
+                        affected_stage=w.get("affected_stage"),
+                    )
+                    for w in raw_vs.get("warnings", [])
+                ),
+            )
+
+        raw_interp = arguments.get("interpretation")
+        interpretation = None
+        if raw_interp:
+            interpretation = InterpretationSummary(
+                summary=raw_interp.get("summary"),
+                important_features=tuple(raw_interp.get("important_features", [])),
+                model_comparisons=tuple(raw_interp.get("model_comparisons", [])),
+                warnings=tuple(
+                    ValidationWarning(
+                        code=w["code"],
+                        message=w["message"],
+                        category=w.get("category", "validation"),
+                        severity=w.get("severity", "warning"),
+                        affected_stage=w.get("affected_stage"),
+                    )
+                    for w in raw_interp.get("warnings", [])
+                ),
+            )
+
+        request = GenerateReportRequest(
+            analysis_run=analysis_run,
+            validation_summary=validation_summary,
+            interpretation=interpretation,
+        )
+        return _tool_result(generate_report.run(request, runs_root=_RUNS_ROOT))
 
     return [
         types.TextContent(
