@@ -1,0 +1,24 @@
+# Core data / numerics
+pandas
+numpy
+scipy
+openpyxl          # read the .xlsx spectra workbook
+
+# Machine learning
+scikit-learn
+xgboost==2.1.4    # pinned for SHAP compatibility (see memory: xgboost-shap-env)
+statsmodels       # ANOVA / Tukey HSD (07)
+
+# Interpretability
+shap
+lime
+
+# Plotting
+matplotlib
+seaborn
+
+# Notebook tooling
+nbformat
+
+# LLM sub-project (09-can-llms-be-used-for-chemometrics)
+langchain
