@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "agentic-chemometrician"
+version = "0.1.0"
+description = "MCP-based agentic chemometrics server for spectral analysis"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp",
+    "numpy",
+    "pandas",
+    "openpyxl",
+    "scikit-learn",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "xgboost==2.1.4",
+    "shap",
+    "lime",
+    "matplotlib",
+    "seaborn",
+    "statsmodels",
+    "nbformat",
+    "langchain",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -16,3 +16,18 @@ wheels/
 .DS_Store
 .vscode/
 .idea/
+
+# Agent tooling
+.swarm/
+.claude/
+.zeus/
+
+# Run artifacts
+runs/
+
+# Packaging
+*.egg
+.pytest_cache/
+
+# Archive (legacy experiments kept for reference)
+archive/
