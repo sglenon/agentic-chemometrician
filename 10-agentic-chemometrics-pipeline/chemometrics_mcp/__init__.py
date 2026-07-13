@@ -1,1 +1,0 @@
-"""Chemometrics MCP server package."""

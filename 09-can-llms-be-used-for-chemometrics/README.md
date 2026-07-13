@@ -1,3 +1,8 @@
+> **Note:** This folder is the early agentic prototype that directly preceded the
+> current system. The lessons learned here — agent-guided preprocessing, self-contained
+> tool scripts, and the agent-memory pattern — shaped the architecture of the full
+> MCP-based pipeline in [`../10-agentic-chemometrics-pipeline/`](../10-agentic-chemometrics-pipeline/).
+
 # Can LLMs be used for chemometrics?
 
 An exploratory sub-project that asks whether an LLM acting as an analytical-chemist
