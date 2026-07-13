@@ -1,51 +1,79 @@
-# NIR Hardwood vs. Vinyl
+# Agentic Chemometrician
 
-Chemometric analysis of portable near-infrared (NIR) spectra for **hardwood vs. vinyl**
-flooring classification. The dataset comes from a portable NIR instrument (trinamiX,
-wavelength range 1454–2446 nm) collected as part of a flooring-materials method-development
-study. The primary objective is hardwood-vs-vinyl separation, with subclasses (hardwood
-species, vinyl brands / wear-layer grades) explored along the way.
+**MCP-based agentic chemometrics server** for spectral analysis. An agent-capable
+client orchestrates deterministic chemometric tools through a human-in-the-loop
+workflow — data loading, preprocessing, modeling, validation, interpretation, and
+report generation.
 
-## The data
-
-- **Source workbook:** `2026-05-21_22-59_Method Dev_wavelength_range_1450-2450.xlsx`
-  (repo root), two sheets — `Spectra Metadata` and `Spectra P100001492`.
-- **Spectra:** 249 wavelength channels, 1454–2446 nm, 4 nm step.
-- **Samples:** 146 spectra joined to metadata, collected 2025-06-24 → 2025-09-09.
-- **Material families** derived from the `Measurement Description` text (hardwood species,
-  vinyl brands / wear layers).
-
-## Repository layout
-
-Each numbered folder is a self-contained analysis notebook plus its exported figures.
-
-| Folder | Contents |
-| --- | --- |
-| `00_analysis_summary` | Cross-model consensus and overall summary |
-| `01_svm_classification` | SVM (vs. LDA) classification |
-| `02_xgboost_classification` | XGBoost classification + feature importance |
-| `03_knn_classification` | k-NN classification, k and distance-metric tuning |
-| `04_clustering_analysis` | KMeans / hierarchical clustering, PCA views |
-| `05_feature_selection_rfe` | Recursive feature elimination, RFE vs. VIP |
-| `06_svr_wear_layer` | SVR regression on vinyl wear-layer thickness |
-| `07_anova_wavelength_analysis` | ANOVA / Tukey HSD per-wavelength analysis |
-| `08_model_interpretability` | SHAP, LIME, PDP, permutation importance |
-| `09-can-llms-be-used-for-chemometrics` | Exploratory LLM-as-chemometrician sub-project |
-
-Top-level `chris-floor_nir_analysis.ipynb` is the original end-to-end exploratory notebook.
-
-## Setup
+## Quick start
 
 Requires Python 3.10.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
+# or with dev dependencies:
+pip install -e ".[dev]"
 ```
 
-> **Note:** `xgboost` is pinned to `2.1.4` for SHAP compatibility. On macOS you may also
-> need `libomp` installed (`brew install libomp`).
+## MCP tools
 
-Launch the notebooks with `jupyter lab` (or open them in VS Code) and run from the repo
-root so the relative path to the data workbook resolves.
+| Tool | Purpose |
+| --- | --- |
+| `inspect_dataset` | Load spectral data, detect metadata, candidate labels, modality, and data quality warnings |
+| `propose_analysis_plan` | Convert a dataset summary into a bounded, human-readable analysis plan for approval |
+| `run_analysis` | Execute approved preprocessing and modeling tasks; save structured run artifacts |
+| `validate_results` | Check for replicate leakage, group leakage, class imbalance, split instability, and suspicious metrics |
+| `select_best_model` | Recommend the most defensible model by balancing performance, validation reliability, interpretability, and task suitability |
+| `recommend_next_model` | Classify a model failure and return a fallback recommendation with rationale |
+| `interpret_results` | Summarize feature and wavelength importance across models; flag unstable or overclaimed interpretations |
+| `generate_report` | Produce a human-reviewable report with metrics, figures, validation warnings, caveats, and next-step recommendations |
+
+The server is backed by a **shared, agent-neutral prompt library** (`prompt-library/`)
+that defines scientific guardrails, skills, and workflows independent of client. The
+workflow includes **human-in-the-loop approval gates** before consequential scientific
+decisions — analysis plan, fallback model selection, final model selection when
+validation warnings exist, and scientific conclusions.
+
+## Project structure
+
+```
+src/
+  chemometrics_contracts/   # Data contracts (SpectralDataset, AnalysisResult, ...)
+  chemometrics_mcp/         # MCP server + tools + core analysis engine
+    core/                   # Deterministic analysis logic (no MCP imports)
+    tools/                  # MCP tool implementations (thin wrappers over core)
+    server.py               # MCP server entry point
+    artifacts.py            # Run artifact path management
+tests/                      # Test suite (pytest / unittest)
+prompt-library/             # Agent-neutral prompts: guardrails, skills, workflows
+agent-memory/               # Changelog and trace of agent work
+runs/                       # Generated run artifacts
+ftir-purity-dataset/        # Reference dataset documentation
+PLAN.md                     # Implementation roadmap
+IMPLEMENTATION-PLAN.md      # Execution checklist
+```
+
+## The dataset
+
+- **Source workbook:** `2026-05-21_22-59_Method Dev_wavelength_range_1450-2450.xlsx`
+  (repo root), two sheets — `Spectra Metadata` and `Spectra P100001492`.
+- **Instrument:** portable NIR (trinamiX), wavelength range 1454–2446 nm, 4 nm step,
+  249 channels.
+- **Samples:** 146 spectra joined to metadata, collected 2025-06-24 → 2025-09-09.
+- **Material families:** hardwood species (fir, mahogany, oak, particle board, pine,
+  poplar) and vinyl flooring brands / wear-layer grades (Home Decorators, LifeProof,
+  TrafficMaster; 6/12/22 mil wear layers).
+
+## Legacy references
+
+| Location | Contents |
+| --- | --- |
+| `09-can-llms-be-used-for-chemometrics/` | Early self-contained agentic prototype (predecessor to this pipeline) |
+| `archive/` | Notebook-based exploratory studies 00–08 and the original analysis notebook |
+
+## Setup details
+
+> **Note:** `xgboost` is pinned to `2.1.4` for SHAP compatibility (optional dev dep).
+> On macOS you may also need `libomp` (`brew install libomp`).
