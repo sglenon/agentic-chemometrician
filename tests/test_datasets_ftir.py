@@ -15,7 +15,7 @@ from chemometrics_mcp.core.datasets import (  # noqa: E402
     load_ftir_composition,
 )
 
-COMPOSITION_TABLE = ROOT / "ftir-purity-dataset" / "ftir_purity_composition_table.md"
+COMPOSITION_TABLE = ROOT / "ftir-purity-dataset" / "ftir_purity_composition_table.txt"
 
 
 class LoadCompositionTableTests(unittest.TestCase):
@@ -88,7 +88,7 @@ class LoadFtirCompositionTests(unittest.TestCase):
     def test_source_references_point_to_composition_table(self) -> None:
         dataset, _ = load_ftir_composition(COMPOSITION_TABLE)
         self.assertTrue(len(dataset.source_references) > 0)
-        self.assertIn("ftir_purity_composition_table.md", dataset.source_references[0].uri)
+        self.assertIn("ftir_purity_composition_table.txt", dataset.source_references[0].uri)
 
     def test_modality_override(self) -> None:
         dataset, inspection = load_ftir_composition(

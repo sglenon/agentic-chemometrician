@@ -42,12 +42,15 @@ _CLASSIFICATION_FALLBACKS: dict[str, str | None] = {
 _MODEL_SPECIFIC_FALLBACKS: dict[str, str] = {
     "svm_rbf": "random_forest",
     "svr": "plsr",
-    "pca_lda": "svm_rbf",       # LDA fails on small/singular covariance
+    "pca_lda": "svm_rbf",           # LDA fails on small/singular covariance
     "plsr": "svr",
     "random_forest": "svm_rbf",
     "kmeans": "pca",
     "xgboost": "random_forest",
     "xgboost_reg": "plsr",
+    "ridge": "plsr",                # PLSR is the canonical linear regression baseline
+    "random_forest_reg": "plsr",
+    "logistic_regression": "svm_rbf",
 }
 
 # ---------------------------------------------------------------------------

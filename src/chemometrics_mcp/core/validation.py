@@ -518,6 +518,87 @@ def check_cross_modality_comparability(
     return warnings
 
 
+def check_easy_task(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_name: str,
+) -> ValidationWarning | None:
+    """Detect tasks where all models are likely to succeed trivially.
+
+    Uses a PCA-based heuristic: projects data to 2 components and measures
+    the ratio of inter-class centroid distance to mean within-class spread.
+    A ratio > 5 suggests high feature separation and an "easy" task.
+
+    Only fires for binary or multi-class classification tasks.
+    """
+    if "classification" not in task_name:
+        return None
+
+    classes = np.unique(y)
+    n_classes = len(classes)
+    if n_classes < 2:
+        return None
+
+    n_components = min(2, X.shape[1], X.shape[0] - 1)
+    if n_components < 1:
+        return None
+
+    try:
+        from sklearn.decomposition import PCA as _PCA
+
+        pca = _PCA(n_components=n_components)
+        X_reduced = pca.fit_transform(X)
+    except Exception:  # noqa: BLE001
+        return None
+
+    # Compute class centroids and within-class std in PCA space.
+    # Use per-component std (mean across components) so the spread reflects
+    # the cluster size in PCA space, not the absolute position of each point.
+    centroids = np.array([X_reduced[y == c].mean(axis=0) for c in classes])
+    within_stds = np.array([X_reduced[y == c].std(axis=0).mean() for c in classes])
+    mean_within_std = float(within_stds.mean())
+
+    if mean_within_std == 0.0:
+        return None
+
+    # For binary: centroid distance / within_std
+    # For multi-class: mean pairwise centroid distance / within_std
+    if n_classes == 2:
+        inter_dist = float(np.linalg.norm(centroids[0] - centroids[1]))
+    else:
+        pairwise = [
+            float(np.linalg.norm(centroids[i] - centroids[j]))
+            for i in range(n_classes)
+            for j in range(i + 1, n_classes)
+        ]
+        inter_dist = float(np.mean(pairwise))
+
+    separation_ratio = inter_dist / mean_within_std
+
+    pca_var_top2 = float(pca.explained_variance_ratio_.sum())
+
+    if separation_ratio > 5.0:
+        return ValidationWarning(
+            code="easy_task_detected",
+            severity="info",
+            category="reliability",
+            message=(
+                f"Task {task_name!r} shows high inter-class separation in PCA space "
+                f"(distance/spread ratio: {separation_ratio:.1f}, "
+                f"top-{n_components} PC variance: {pca_var_top2:.1%}). "
+                "Low variance across models is expected — this may not be a "
+                "discriminating benchmark test."
+            ),
+            details={
+                "separation_ratio": separation_ratio,
+                "pca_variance_top2": pca_var_top2,
+                "n_classes": n_classes,
+            },
+        )
+
+    return None
+
+
 def run_all_checks(
     results: Sequence[AnalysisResult],
     dataset: SpectralDataset | None = None,

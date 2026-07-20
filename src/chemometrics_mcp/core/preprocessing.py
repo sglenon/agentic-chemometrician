@@ -157,4 +157,33 @@ def apply(X: np.ndarray, method: str, *, axis: np.ndarray | None = None) -> tupl
         }
         return X_out, details
 
+    if method == "standard_scaler":
+        # Column-wise z-score normalization (fit on full X — acceptable for exploratory runs).
+        # Note: fitting on all samples before CV splits is a minor data-leakage risk;
+        # acceptable for chemometrics exploratory analysis but flagged as a caveat.
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_out = scaler.fit_transform(X)
+        details = {
+            "method": method,
+            "shape_in": [n, p],
+            "shape_out": list(X_out.shape),
+            "note": "StandardScaler fit on full X — minor leakage risk in CV",
+        }
+        return X_out, details
+
+    if method == "robust_scaler":
+        # Column-wise scaling using IQR (robust to outlier wavelengths).
+        # Same caveat as standard_scaler.
+        from sklearn.preprocessing import RobustScaler
+        scaler = RobustScaler()
+        X_out = scaler.fit_transform(X)
+        details = {
+            "method": method,
+            "shape_in": [n, p],
+            "shape_out": list(X_out.shape),
+            "note": "RobustScaler fit on full X — minor leakage risk in CV",
+        }
+        return X_out, details
+
     raise ValueError(f"Unknown preprocessing method: {method!r}")

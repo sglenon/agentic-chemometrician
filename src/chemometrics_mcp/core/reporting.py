@@ -4,10 +4,14 @@ No MCP imports. No side effects. Just builds strings and dicts from contracts.
 """
 from __future__ import annotations
 
+import collections
 from typing import TYPE_CHECKING
+
+import numpy as np
 
 if TYPE_CHECKING:
     from chemometrics_contracts import (
+        AnalysisResult,
         AnalysisRun,
         InterpretationSummary,
         ValidationSummary,
@@ -153,6 +157,10 @@ def build_markdown_report(
             lines.append(f"| {prep_str} | {model} | {key_metric} | {key_value} |")
         lines.append("")
 
+    # 4b. Standalone model comparison table (always included)
+    lines.append(build_model_comparison_table(list(run.results)))
+    lines.append("")
+
     # 5. Results table
     lines.append("## Results")
     if run.results:
@@ -285,6 +293,109 @@ def build_markdown_report(
     # 12. Footer
     lines.append(_FOOTER)
 
+    return "\n".join(lines)
+
+
+_MODEL_COMPLEXITY: dict[str, str] = {
+    "svm_rbf": "medium (kernel SVM, O(n²) fit)",
+    "svr": "medium (kernel SVR, O(n²) fit)",
+    "random_forest": "medium (100 trees)",
+    "random_forest_reg": "medium (100 trees)",
+    "pca_lda": "low (linear)",
+    "logistic_regression": "low (linear, L2)",
+    "ridge": "low (linear, L2)",
+    "plsr": "low (latent variable)",
+    "pca": "low (linear)",
+    "kmeans": "low",
+    "xgboost": "high (gradient boosting)",
+    "xgboost_reg": "high (gradient boosting)",
+}
+
+
+def build_model_comparison_table(
+    results: "list[AnalysisResult] | tuple[AnalysisResult, ...]",
+) -> str:
+    """Build a standalone Markdown model-comparison table.
+
+    Columns: Task | Model | Key metric | Value | Complexity | CV-std (stability).
+
+    ``CV-std`` is the standard deviation of the primary metric across multiple
+    seeds if more than one result exists for the same model; otherwise ``n/a``.
+
+    Parameters
+    ----------
+    results:
+        Sequence of :class:`AnalysisResult` objects to compare.
+
+    Returns
+    -------
+    str
+        Markdown table as a string.
+    """
+    if not results:
+        return "*No results available for comparison.*"
+
+    # Group results by (task_name, model_name) to compute CV-std across seeds
+    grouped: dict[tuple[str, str], list["AnalysisResult"]] = collections.defaultdict(list)
+    for r in results:
+        grouped[(r.task_name, r.model_name)].append(r)
+
+    lines: list[str] = [
+        "## Model Comparison Table",
+        "",
+        "| Task | Model | Key Metric | Value | Complexity | Stability (CV-std) |",
+        "|------|-------|------------|-------|------------|--------------------|",
+    ]
+
+    # Determine primary metric per task type
+    def _primary_metric(r: "AnalysisResult") -> tuple[str, float | None]:
+        if "classification" in r.task_name:
+            for k in ("accuracy", "balanced_accuracy", "f1_weighted", "f1_macro"):
+                if k in r.metrics and isinstance(r.metrics[k], (int, float)):
+                    return k, float(r.metrics[k])
+        elif "regression" in r.task_name:
+            for k in ("r2", "rmse", "mae"):
+                if k in r.metrics and isinstance(r.metrics[k], (int, float)):
+                    return k, float(r.metrics[k])
+        # fallback: first numeric metric
+        for k, v in r.metrics.items():
+            if isinstance(v, (int, float)):
+                return k, float(v)
+        return "—", None
+
+    seen: set[tuple[str, str]] = set()
+    for (task, model), group in grouped.items():
+        if (task, model) in seen:
+            continue
+        seen.add((task, model))
+
+        # Representative result (last one, as it may reflect best preprocessing)
+        rep = group[-1]
+        metric_key, metric_val = _primary_metric(rep)
+        val_str = f"{metric_val:.4f}" if metric_val is not None else "—"
+
+        complexity = _MODEL_COMPLEXITY.get(model, "unknown")
+
+        # Stability: std across seeds/runs if more than one result
+        if len(group) > 1:
+            vals = [_primary_metric(r)[1] for r in group if _primary_metric(r)[1] is not None]
+            if len(vals) > 1:
+                cv_std = float(np.std(vals, ddof=0))
+                stability_str = f"{cv_std:.4f}"
+            else:
+                stability_str = "n/a"
+        else:
+            stability_str = "n/a"
+
+        lines.append(
+            f"| {task} | {model} | {metric_key} | {val_str} | {complexity} | {stability_str} |"
+        )
+
+    lines.append("")
+    lines.append(
+        "*Stability = std of primary metric across seeds (lower is better). "
+        "n/a = single run only.*"
+    )
     return "\n".join(lines)
 
 

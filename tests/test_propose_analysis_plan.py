@@ -172,17 +172,21 @@ class TestRecommendModelFamilies(unittest.TestCase):
     def test_multi_class_classification(self):
         insp = _inspection()
         result = recommend_model_families("multi_class_classification", insp)
-        self.assertEqual(result, ["svm_rbf", "random_forest", "pca_lda", "xgboost"])
+        self.assertEqual(
+            result, ["svm_rbf", "random_forest", "logistic_regression", "pca_lda", "xgboost"]
+        )
 
     def test_binary_classification(self):
         insp = _inspection()
         result = recommend_model_families("binary_classification", insp)
-        self.assertEqual(result, ["svm_rbf", "random_forest", "pca_lda", "xgboost"])
+        self.assertEqual(
+            result, ["svm_rbf", "random_forest", "logistic_regression", "pca_lda", "xgboost"]
+        )
 
     def test_regression(self):
         insp = _inspection()
         result = recommend_model_families("regression", insp)
-        self.assertEqual(result, ["plsr", "svr", "random_forest", "xgboost_reg"])
+        self.assertEqual(result, ["plsr", "svr", "ridge", "random_forest_reg", "xgboost_reg"])
 
     def test_unsupervised_exploration(self):
         insp = _inspection()

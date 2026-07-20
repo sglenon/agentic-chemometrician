@@ -161,11 +161,27 @@ def _render_cluster_sizes(fig_data: dict, output_path: Path, fmt: str, dpi: int)
     return _save(fig, output_path, fmt, dpi)
 
 
+def _render_residuals(fig_data: dict, output_path: Path, fmt: str, dpi: int) -> Path:
+    residuals_data = fig_data["residuals"]
+    fitted = residuals_data["fitted"]
+    residuals = residuals_data["residuals"]
+    fig, ax = plt.subplots(figsize=(_FIG_WIDTH, _FIG_HEIGHT))
+    ax.scatter(fitted, residuals, s=20, alpha=0.7, color="#4C72B0",
+               edgecolors="#333333", linewidths=0.3)
+    ax.axhline(0, color="#888888", linestyle="--", linewidth=1)
+    ax.set_xlabel("Fitted (Predicted)")
+    ax.set_ylabel("Residual")
+    ax.set_title("Residuals vs Fitted")
+    fig.tight_layout()
+    return _save(fig, output_path, fmt, dpi)
+
+
 _RENDERERS = {
     "confusion_matrix": _render_confusion_matrix,
     "feature_importances": _render_feature_importances,
     "explained_variance_ratio": _render_explained_variance,
     "predicted_vs_actual": _render_predicted_vs_actual,
+    "residuals": _render_residuals,
     "cv_accuracy_per_fold": _render_cv_accuracy,
     "cluster_sizes": _render_cluster_sizes,
 }

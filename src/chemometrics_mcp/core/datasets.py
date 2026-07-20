@@ -6,6 +6,12 @@ Supported formats
     - ``Spectra Metadata`` — one row per sample, columns are sample attributes.
     - ``Spectra <device>`` — first column is wavelength/wavenumber axis; remaining
       columns are samples identified by Spectrum ID, matching the metadata sheet.
+- Real FTIR .txt files from fwdftirjune262026/:
+    - Header line: ``##YUNITS=%T``
+    - Data: whitespace-separated wavenumber (cm⁻¹) + transmittance (%T) pairs.
+    - Loaded via :func:`load_ftir_real`, which reads all .txt files in a directory,
+      interpolates to a common 400–4000 cm⁻¹ grid at 4 cm⁻¹ step, and assigns
+      purity labels from the built-in manifest ``_FTIR_REAL_PURITY_MANIFEST``.
 
 The loader is deterministic: given the same file it always returns the same
 ``SpectralDataset`` and ``DatasetInspection`` with no random operations.
@@ -19,6 +25,7 @@ from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import interp1d
 
 from chemometrics_contracts import (
     ArtifactReference,
@@ -456,6 +463,270 @@ def load_ftir_composition(
     return dataset, inspection
 
 
+# ---------------------------------------------------------------------------
+# Real FTIR loader — fwdftirjune262026 dataset
+# ---------------------------------------------------------------------------
+#
+# Source: /ftir-purity-dataset/fwdftirjune262026/ (measured June 26, 2026)
+# Format: plain-text, header "##YUNITS=%T", two whitespace-separated columns:
+#   col 1 = wavenumber (cm⁻¹), col 2 = transmittance (%T).
+#
+# Purity mapping scheme
+# ---------------------
+# Each filename stem encodes a compound group (the leading letter(s)) plus an
+# optional replicate index (the trailing digit).  Samples with the same group
+# letter share a purity tier; the replicate index has no purity significance.
+#
+#   C, C1, C2  → purity group "C"
+#   I, I1, I2  → purity group "I"
+#   J, J1, J2  → purity group "J"
+#   L1, L2     → purity group "L"   (L.txt absent — base run missing)
+#   M, M1, M2  → purity group "M"
+#   N, N1, N2  → purity group "N"
+#   s31acn2,
+#   s31meoh,
+#   S31SOLID   → purity group "s31" (sample 31 in different solvents/state)
+#
+# Ambiguous / missing:
+#   - L.txt is absent; only L1 and L2 are available.
+#   - s31acn1.txt is absent; only s31acn2 is present.
+#   - ETOH.smf has no .txt counterpart — excluded from this loader.
+#   - The letter codes (C, I, J, L, M, N) do not map directly to the
+#     composition table labels (AMI-100, FC-100, …); a compound-identity
+#     manifest from the laboratory is needed to close this gap.  Until then,
+#     labels carry only the group letter.
+
+_FTIR_REAL_PURITY_MANIFEST: dict[str, str] = {
+    # stem (case-sensitive, as on disk) → purity group label
+    "C": "C",
+    "C1": "C",
+    "C2": "C",
+    "I": "I",
+    "I1": "I",
+    "I2": "I",
+    "J": "J",
+    "J1": "J",
+    "J2": "J",
+    "L1": "L",
+    "L2": "L",
+    "M": "M",
+    "M1": "M",
+    "M2": "M",
+    "N": "N",
+    "N1": "N",
+    "N2": "N",
+    "s31acn2": "s31",
+    "s31meoh": "s31",
+    "S31SOLID": "s31",
+}
+
+
+def _parse_ftir_txt(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Parse a single FTIR .txt file.
+
+    Expected format::
+
+        ##YUNITS=%T
+        399.264912 95.047945
+        401.193728 87.710841
+        ...
+
+    Returns
+    -------
+    wavenumbers, transmittances : np.ndarray, each shape (N,)
+
+    Raises
+    ------
+    ValueError
+        If the file cannot be parsed or contains fewer than 2 valid data rows.
+    """
+    wavenumbers: list[float] = []
+    transmittances: list[float] = []
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            try:
+                wn = float(parts[0])
+                tr = float(parts[1])
+            except ValueError:
+                continue
+            wavenumbers.append(wn)
+            transmittances.append(tr)
+    if len(wavenumbers) < 2:
+        raise ValueError(f"Fewer than 2 valid data rows in {path}")
+    return np.asarray(wavenumbers, dtype=float), np.asarray(transmittances, dtype=float)
+
+
+def load_ftir_real(
+    data_dir: str | Path,
+    *,
+    wavenumber_start: float = 400.0,
+    wavenumber_end: float = 4000.0,
+    wavenumber_step: float = 4.0,
+    purity_manifest: dict[str, str] | None = None,
+    modality_override: str | None = None,
+) -> tuple[SpectralDataset, DatasetInspection]:
+    """Load real FTIR measurements from a directory of plain-text files.
+
+    Each ``.txt`` file in *data_dir* must follow the ``##YUNITS=%T`` format
+    (header line + two whitespace-separated columns: wavenumber, transmittance).
+    Files are sorted lexicographically for deterministic ordering.
+
+    Parameters
+    ----------
+    data_dir:
+        Directory containing ``.txt`` FTIR files.
+    wavenumber_start, wavenumber_end, wavenumber_step:
+        Target common grid parameters.  Defaults: 400–4000 cm⁻¹ at 4 cm⁻¹.
+    purity_manifest:
+        Mapping of filename stem → purity label.  Defaults to the built-in
+        :data:`_FTIR_REAL_PURITY_MANIFEST`.  Pass a custom dict to override.
+    modality_override:
+        If given, overrides the default ``"FTIR"`` modality string.
+
+    Returns
+    -------
+    (SpectralDataset, DatasetInspection)
+
+    Raises
+    ------
+    FileNotFoundError
+        If *data_dir* does not exist or contains no ``.txt`` files.
+    ValueError
+        If any file cannot be parsed.
+
+    Notes
+    -----
+    - **Missing base run**: ``L.txt`` is absent; only ``L1`` and ``L2`` are
+      loaded.  A warning is added to the inspection.
+    - **Missing replicate**: ``s31acn1.txt`` is absent; only ``s31acn2`` is
+      loaded.
+    - **Unknown stems**: filename stems not in the manifest receive the label
+      ``"unknown"`` and trigger an inspection warning.
+    - Transmittance values above 100 %T (instrument artefacts / noise) are
+      clipped to [0, 110] before interpolation but not removed.
+    """
+    dir_path = Path(data_dir)
+    if not dir_path.exists():
+        raise FileNotFoundError(f"FTIR data directory not found: {dir_path}")
+
+    manifest = purity_manifest if purity_manifest is not None else _FTIR_REAL_PURITY_MANIFEST
+
+    txt_files = sorted(dir_path.glob("*.txt"))
+    if not txt_files:
+        raise FileNotFoundError(f"No .txt files found in {dir_path}")
+
+    # Build common interpolation grid
+    n_grid = int(round((wavenumber_end - wavenumber_start) / wavenumber_step)) + 1
+    common_axis = np.linspace(wavenumber_start, wavenumber_end, n_grid)
+
+    spectra_rows: list[np.ndarray] = []
+    sample_ids: list[str] = []
+    labels: list[str] = []
+    metadata_records: list[dict[str, Any]] = []
+    warnings: list[ValidationWarning] = []
+    unknown_stems: list[str] = []
+
+    for txt_path in txt_files:
+        stem = txt_path.stem
+        purity = manifest.get(stem)
+        if purity is None:
+            purity = "unknown"
+            unknown_stems.append(stem)
+
+        wn, tr = _parse_ftir_txt(txt_path)
+
+        # Interpolate to common grid (linear; clamp extrapolation to boundary values)
+        interp_fn = interp1d(wn, tr, kind="linear", bounds_error=False,
+                             fill_value=(tr[0], tr[-1]))
+        tr_interp = interp_fn(common_axis)
+
+        spectra_rows.append(tr_interp)
+        sample_ids.append(stem)
+        labels.append(purity)
+        metadata_records.append({
+            "sample_id": stem,
+            "purity_group": purity,
+            "source_file": txt_path.name,
+            "raw_wavenumber_min": float(wn.min()),
+            "raw_wavenumber_max": float(wn.max()),
+            "raw_n_points": int(len(wn)),
+        })
+
+    # Warn about missing base run for group L
+    if not any(p == "L" and not s.endswith(("1", "2")) for s, p in zip(sample_ids, labels)):
+        if any(p == "L" for p in labels):
+            warnings.append(ValidationWarning(
+                code="missing_base_run",
+                message="L.txt is absent; only L1 and L2 are available for purity group 'L'.",
+                category="metadata",
+                severity="warning",
+                affected_stage="inspection",
+            ))
+
+    if unknown_stems:
+        warnings.append(ValidationWarning(
+            code="unknown_sample_stems",
+            message=(
+                f"Filename stem(s) not in purity manifest: {unknown_stems}. "
+                "Assigned label 'unknown'. Update _FTIR_REAL_PURITY_MANIFEST to resolve."
+            ),
+            category="metadata",
+            severity="warning",
+            affected_stage="inspection",
+        ))
+
+    X = np.vstack(spectra_rows)  # shape (n_samples, n_grid)
+    n_samples, n_features = X.shape
+
+    # Standard data quality checks
+    for check in [
+        _check_non_numeric(X),
+        _check_missing_values(X),
+        _check_small_sample(n_samples),
+        _check_duplicate_ids(sample_ids),
+    ]:
+        if check is not None:
+            warnings.append(check)
+
+    modality = modality_override or "FTIR"
+
+    source_ref = ArtifactReference(
+        kind="source_directory",
+        uri=dir_path.as_posix(),
+        label=dir_path.name,
+        mime_type="text/plain",
+    )
+
+    dataset = SpectralDataset(
+        x=tuple(tuple(float(v) for v in row) for row in X.tolist()),
+        axis=tuple(float(v) for v in common_axis.tolist()),
+        metadata=tuple(metadata_records),
+        labels=tuple(labels),
+        modality=modality,
+        sample_ids=tuple(sample_ids),
+        source_references=(source_ref,),
+    )
+
+    inspection = DatasetInspection(
+        sample_count=n_samples,
+        feature_count=n_features,
+        axis_min=float(common_axis.min()),
+        axis_max=float(common_axis.max()),
+        modality=modality,
+        candidate_label_columns=("purity_group",),
+        candidate_group_columns=("purity_group",),
+        warnings=tuple(warnings),
+    )
+
+    return dataset, inspection
+
+
 def save_inspection_artifact(
     inspection: DatasetInspection,
     artifact_dir: Path,
@@ -466,3 +737,224 @@ def save_inspection_artifact(
     out = artifact_dir / filename
     out.write_text(json.dumps(inspection.to_dict(), indent=2, default=str), encoding="utf-8")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Flooring NIR label extraction
+# ---------------------------------------------------------------------------
+
+_SPECIES_KEYWORDS: list[tuple[str, str]] = [
+    ("particle board", "particle_board"),
+    ("particle_board", "particle_board"),
+    ("mahogany", "mahogany"),
+    ("poplar", "poplar"),
+    ("pine", "pine"),
+    ("fir", "fir"),
+    ("oak", "oak"),
+]
+
+
+def _parse_flooring_description(desc: str) -> dict[str, Any]:
+    """Parse a Measurement Description from the flooring NIR dataset.
+
+    Returns a dict with keys:
+    - ``material_type``: ``"lumber"`` | ``"vinyl"`` | ``None``
+    - ``species``: species string for lumber (e.g. ``"fir"``, ``"particle_board"``) or ``None``
+    - ``wear_layer_mil``: integer wear layer thickness for vinyl or ``None``
+    """
+    desc = str(desc).strip()
+    lower = desc.lower()
+    result: dict[str, Any] = {
+        "raw_description": desc,
+        "material_type": None,
+        "species": None,
+        "wear_layer_mil": None,
+    }
+
+    if lower.startswith("lumber"):
+        result["material_type"] = "lumber"
+        parts = [p.strip() for p in desc.split(",")]
+        if len(parts) >= 2:
+            species_raw = parts[1].strip().lower()
+            for keyword, canonical in _SPECIES_KEYWORDS:
+                if keyword in species_raw:
+                    result["species"] = canonical
+                    break
+    elif lower.startswith("vinyl"):
+        result["material_type"] = "vinyl"
+        m = re.search(r"\bwl\s+(\d+)", lower)
+        if m:
+            result["wear_layer_mil"] = int(m.group(1))
+
+    return result
+
+
+def load_flooring_nir(
+    source_path: str | Path,
+    *,
+    task: str = "species",
+    modality_override: str | None = None,
+) -> tuple[SpectralDataset, DatasetInspection]:
+    """Load the flooring NIR Excel and extract labels for harder analysis tasks.
+
+    The dataset contains lumber and vinyl flooring samples measured in the
+    1450–2450 nm NIR range. Labels are parsed from the ``Measurement Description``
+    metadata column.
+
+    Parameters
+    ----------
+    source_path:
+        Path to the flooring ``.xlsx`` file.
+    task:
+        One of:
+
+        - ``"species"`` — lumber samples only; label = wood species
+          (fir, mahogany, oak, pine, poplar, particle_board).
+          Expected n ≈ 44 samples, 6 classes.
+        - ``"wear_layer"`` — vinyl samples only; label = wear-layer thickness
+          in mil (float: 6.0, 12.0, 22.0).
+          Expected n ≈ 90 samples.
+        - ``"material_type"`` — all flooring samples; label = ``"lumber"`` | ``"vinyl"``.
+
+    modality_override:
+        If supplied, overrides inferred modality.
+
+    Returns
+    -------
+    tuple of (SpectralDataset, DatasetInspection).
+    """
+    path = Path(source_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset file not found: {path}")
+
+    xl = pd.ExcelFile(path)
+    sheet_names: list[str] = xl.sheet_names
+
+    metadata_sheet = next((s for s in sheet_names if "metadata" in s.lower()), None)
+    spectra_sheet = next(
+        (s for s in sheet_names if "spectra" in s.lower() and "metadata" not in s.lower()),
+        None,
+    )
+
+    if metadata_sheet is None or spectra_sheet is None:
+        raise ValueError(
+            f"Could not find required sheets. Expected 'Spectra Metadata' and a spectra sheet. "
+            f"Found: {sheet_names}"
+        )
+
+    metadata_df: pd.DataFrame = xl.parse(metadata_sheet)
+    spectra_df: pd.DataFrame = xl.parse(spectra_sheet)
+
+    axis_col = spectra_df.columns[0]
+    axis_values: np.ndarray = spectra_df[axis_col].to_numpy(dtype=float)
+    spectrum_id_cols = spectra_df.columns[1:]
+    spectra_matrix: np.ndarray = spectra_df[spectrum_id_cols].to_numpy(dtype=float).T
+
+    # Align metadata to spectrum column order
+    if "Spectrum ID" in metadata_df.columns:
+        ordered_meta = (
+            metadata_df.set_index("Spectrum ID")
+            .reindex([int(c) if str(c).isdigit() else c for c in spectrum_id_cols])
+            .reset_index()
+        )
+    else:
+        ordered_meta = metadata_df.reset_index(drop=True)
+
+    desc_col = "Measurement Description"
+    if desc_col not in ordered_meta.columns:
+        raise ValueError(f"Column {desc_col!r} not found in metadata.")
+
+    parsed_rows = [_parse_flooring_description(d) for d in ordered_meta[desc_col].tolist()]
+    parsed_df = pd.DataFrame(parsed_rows)
+
+    # Select mask and label column based on task
+    if task == "species":
+        keep_mask = parsed_df["material_type"] == "lumber"
+        label_series = parsed_df.loc[keep_mask, "species"]
+        task_label_col = "species"
+        is_regression = False
+    elif task == "wear_layer":
+        keep_mask = parsed_df["material_type"] == "vinyl"
+        label_series = parsed_df.loc[keep_mask, "wear_layer_mil"].astype("float64")
+        task_label_col = "wear_layer_mil"
+        is_regression = True
+    elif task == "material_type":
+        keep_mask = parsed_df["material_type"].notna()
+        label_series = parsed_df.loc[keep_mask, "material_type"]
+        task_label_col = "material_type"
+        is_regression = False
+    else:
+        raise ValueError(
+            f"Unknown task {task!r}. Expected 'species', 'wear_layer', or 'material_type'."
+        )
+
+    # Drop rows where label is None/NaN
+    valid_mask = keep_mask & label_series.notna()
+    valid_idx = valid_mask[valid_mask].index.tolist()
+
+    if len(valid_idx) == 0:
+        raise ValueError(f"No valid samples found for task={task!r}.")
+
+    X_filtered = spectra_matrix[valid_idx]
+    labels_raw = label_series.loc[valid_idx].tolist()
+    labels: tuple[Any, ...]
+    if is_regression:
+        labels = tuple(float(v) for v in labels_raw)
+    else:
+        labels = tuple(str(v) for v in labels_raw)
+
+    if "Spectrum ID" in ordered_meta.columns:
+        sample_ids = tuple(
+            str(int(ordered_meta.loc[i, "Spectrum ID"])) for i in valid_idx
+        )
+    else:
+        sample_ids = tuple(str(i) for i in valid_idx)
+
+    metadata_records: list[dict[str, Any]] = [
+        {str(k): str(v) for k, v in row.items()}
+        for row in ordered_meta.loc[valid_idx].to_dict(orient="records")
+    ]
+
+    modality = modality_override or _infer_modality(axis_values)
+
+    source_ref = ArtifactReference(
+        kind="source_file",
+        uri=path.as_posix(),
+        label=path.name,
+        mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    dataset = SpectralDataset(
+        x=tuple(tuple(row) for row in X_filtered.tolist()),
+        axis=tuple(axis_values.tolist()),
+        metadata=tuple(metadata_records),
+        labels=labels,
+        modality=modality,
+        sample_ids=sample_ids,
+        source_references=(source_ref,),
+    )
+
+    n_samples = len(valid_idx)
+    n_features = int(spectra_matrix.shape[1])
+
+    warnings_list: list[ValidationWarning] = []
+    for check in [
+        _check_non_numeric(X_filtered),
+        _check_missing_values(X_filtered),
+        _check_small_sample(n_samples),
+    ]:
+        if check is not None:
+            warnings_list.append(check)
+
+    inspection = DatasetInspection(
+        sample_count=n_samples,
+        feature_count=n_features,
+        axis_min=float(axis_values.min()),
+        axis_max=float(axis_values.max()),
+        modality=modality,
+        candidate_label_columns=(task_label_col,),
+        candidate_group_columns=(),
+        warnings=tuple(warnings_list),
+    )
+
+    return dataset, inspection

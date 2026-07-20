@@ -26,7 +26,7 @@ import logging
 
 from chemometrics_mcp.artifacts import artifact_ref, ensure_run_dir, make_run_id
 from chemometrics_mcp.core import modeling, preprocessing
-from chemometrics_mcp.core.validation import check_split_instability
+from chemometrics_mcp.core.validation import check_easy_task, check_split_instability
 
 try:
     from chemometrics_mcp.core.figures import render_figure as _render_figure
@@ -91,13 +91,15 @@ def run(
         else ["raw"]
     )
 
-    # 4. Build CV splitter
+    task_name = approved_plan.task_name or "unsupervised_exploration"
+
+    # 4. Build CV splitter — regression must not use StratifiedKFold
+    _is_regression = task_name == "regression"
+    _default_cv_strategy = "grouped_kfold_5" if _is_regression else "stratified_kfold_5"
     cv = modeling.make_cv_splitter(
-        approved_plan.validation_strategy or "stratified_kfold_5",
+        approved_plan.validation_strategy or _default_cv_strategy,
         y,
     )
-
-    task_name = approved_plan.task_name or "unsupervised_exploration"
 
     run_id = request.run_id or make_run_id(slug="run")
     artifact_dir = ensure_run_dir(run_id, runs_root)
@@ -109,6 +111,12 @@ def run(
     warnings: list[ValidationWarning] = []
     result_artifacts: list[ArtifactReference] = []
     all_prep_details: list[dict] = []
+
+    # 4b. Caveat: detect easy tasks via PCA separation heuristic
+    if y is not None and task_name:
+        easy_task_warning = check_easy_task(X, y, task_name)
+        if easy_task_warning is not None:
+            warnings.append(easy_task_warning)
 
     # 5. For each preprocessing candidate
     for preprocessing_method in preprocessing_candidates:

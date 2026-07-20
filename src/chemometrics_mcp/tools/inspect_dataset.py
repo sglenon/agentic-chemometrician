@@ -20,9 +20,14 @@ from chemometrics_contracts import (
 )
 
 from chemometrics_mcp.artifacts import ensure_run_dir, make_run_id, artifact_ref
-from chemometrics_mcp.core.datasets import load_excel_nir, load_ftir_composition, save_inspection_artifact
+from chemometrics_mcp.core.datasets import (
+    load_excel_nir,
+    load_ftir_composition,
+    load_ftir_real,
+    save_inspection_artifact,
+)
 
-_SUPPORTED_EXTENSIONS = frozenset({".xlsx", ".xls", ".md"})
+_SUPPORTED_EXTENSIONS = frozenset({".xlsx", ".xls", ".txt"})
 
 
 def _unsupported_format_response(source_uri: str, ext: str) -> ToolResponse[DatasetInspection]:
@@ -62,7 +67,9 @@ def run(request: InspectDatasetRequest, *, runs_root: str | Path = "runs") -> To
     source_path = Path(request.source_uri)
     ext = source_path.suffix.lower()
 
-    if ext not in _SUPPORTED_EXTENSIONS:
+    # Directories are valid for FTIR real-data mode; skip extension check for them.
+    is_dir_target = source_path.is_dir() or request.source_format == "ftir_dir"
+    if not is_dir_target and ext not in _SUPPORTED_EXTENSIONS:
         return _unsupported_format_response(request.source_uri, ext)
 
     if not source_path.exists():
@@ -75,7 +82,14 @@ def run(request: InspectDatasetRequest, *, runs_root: str | Path = "runs") -> To
     started_at = datetime.datetime.now(tz=datetime.timezone.utc).isoformat()
 
     try:
-        if ext == ".md" or request.source_format == "composition_md":
+        if source_path.is_dir() or request.source_format == "ftir_dir":
+            # Directory of real FTIR .txt measurement files
+            _dataset, inspection = load_ftir_real(
+                source_path,
+                modality_override=request.modality_override,
+            )
+        elif ext == ".txt" or request.source_format == "composition_md":
+            # Single composition-table .txt file (markdown table format)
             _dataset, inspection = load_ftir_composition(
                 source_path,
                 modality_override=request.modality_override,

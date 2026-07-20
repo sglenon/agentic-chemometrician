@@ -71,8 +71,19 @@ def recommend_preprocessing(inspection: DatasetInspection) -> list[str]:
 # Validation strategy
 # ---------------------------------------------------------------------------
 
-def recommend_validation_strategy(inspection: DatasetInspection) -> str:
-    """Return a cross-validation strategy based on sample size and groups."""
+def recommend_validation_strategy(
+    inspection: DatasetInspection,
+    task_name: str | None = None,
+) -> str:
+    """Return a cross-validation strategy based on task type, sample size and groups.
+
+    Regression tasks use ``grouped_kfold_5`` (plain KFold) because
+    ``StratifiedKFold`` requires discrete class labels.
+    """
+    if task_name == "regression":
+        # Plain KFold for regression — stratification requires discrete labels
+        return "grouped_kfold_5"
+
     if list(inspection.candidate_group_columns):
         return "grouped_kfold_5"
 
@@ -91,9 +102,9 @@ def recommend_validation_strategy(inspection: DatasetInspection) -> str:
 def recommend_model_families(task_name: str | None, inspection: DatasetInspection) -> list[str]:  # noqa: ARG001
     """Return model families suitable for *task_name*."""
     if task_name in ("multi_class_classification", "binary_classification"):
-        return ["svm_rbf", "random_forest", "pca_lda", "xgboost"]
+        return ["svm_rbf", "random_forest", "logistic_regression", "pca_lda", "xgboost"]
     if task_name == "regression":
-        return ["plsr", "svr", "random_forest", "xgboost_reg"]
+        return ["plsr", "svr", "ridge", "random_forest_reg", "xgboost_reg"]
     if task_name in ("unsupervised_exploration", "clustering"):
         return ["pca", "kmeans"]
     # None — ambiguous; exploratory fallback only
@@ -187,7 +198,7 @@ def build_plan(request: ProposeAnalysisPlanRequest) -> AnalysisPlan:
     )
 
     preprocessing_candidates = recommend_preprocessing(inspection)
-    validation_strategy = recommend_validation_strategy(inspection)
+    validation_strategy = recommend_validation_strategy(inspection, task_name)
     model_families = recommend_model_families(task_name, inspection)
 
     # Collect warnings — existing inspection warnings first

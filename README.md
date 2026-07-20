@@ -51,8 +51,6 @@ prompt-library/             # Agent-neutral prompts: guardrails, skills, workflo
 agent-memory/               # Changelog and trace of agent work
 runs/                       # Generated run artifacts
 ftir-purity-dataset/        # Reference dataset documentation
-PLAN.md                     # Implementation roadmap
-IMPLEMENTATION-PLAN.md      # Execution checklist
 ```
 
 ## The dataset

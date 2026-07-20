@@ -9,7 +9,8 @@ from sklearn.cluster import KMeans
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -72,6 +73,7 @@ def _classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
         "f1_macro": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+        "f1_weighted": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
     }
 
 
@@ -94,11 +96,30 @@ def _confusion_matrix_figure(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 
 def _predicted_vs_actual_figure(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    residuals = (y_pred - y_true).tolist()
     return {
         "predicted_vs_actual": {
             "predicted": [float(v) for v in y_pred],
             "actual": [float(v) for v in y_true],
-        }
+        },
+        "residuals": {
+            "fitted": [float(v) for v in y_pred],
+            "residuals": [float(v) for v in residuals],
+        },
+    }
+
+
+def _wavelength_importance_figure(importances: np.ndarray, axis: np.ndarray | None, top_n: int = 20) -> dict:
+    """Build figure data for wavelength importance (top-N by importance)."""
+    top_idx = np.argsort(importances)[::-1][:top_n]
+    axis_list = axis.tolist() if axis is not None else None
+    if axis_list is not None:
+        top_axis = [float(axis_list[i]) for i in top_idx if i < len(axis_list)]
+    else:
+        top_axis = [int(i) for i in top_idx]
+    return {
+        "feature_importances": [float(importances[i]) for i in top_idx],
+        "axis": top_axis,
     }
 
 
@@ -213,6 +234,8 @@ def run_cv_model(
             "feature_importances": [float(importances[i]) for i in top20_idx],
             "axis": top20_axis,
         }
+        # Include confusion matrix so callers can render both importance + CM
+        fig_data.update(_confusion_matrix_figure(y, y_pred))
 
         interpretation_results: list[InterpretationResult] = []
         if enable_shap and compute_shap_importance is not None:
@@ -523,6 +546,106 @@ def run_cv_model(
         )
         return result, fig_data
 
+    # --------------------------------------------------------------- ridge
+    if model_name == "ridge":
+        if y is None:
+            raise ValueError("ridge requires a numeric target y")
+        y_arr = np.array(y, dtype=float)
+        ridge_m = Ridge(alpha=1.0)
+        y_pred = cross_val_predict(ridge_m, X, y_arr, cv=cv).ravel()
+        metrics = _regression_metrics(y_arr, y_pred)
+
+        ridge_m.fit(X, y_arr)
+        coef_abs = np.abs(ridge_m.coef_)
+        top10_idx = np.argsort(coef_abs)[::-1][:10]
+        if axis is not None:
+            selected = tuple(float(axis[i]) for i in top10_idx if i < len(axis))
+        else:
+            selected = tuple(int(i) for i in top10_idx)
+
+        fig_data = _wavelength_importance_figure(coef_abs, axis)
+        fig_data.update(_predicted_vs_actual_figure(y_arr, y_pred))
+
+        result = AnalysisResult(
+            task_name=task_name,
+            model_name=model_name,
+            preprocessing=(preprocessing_applied,),
+            metrics=metrics,
+            predictions=tuple(float(v) for v in y_pred),
+            selected_features=selected,
+            figures=(),
+            validation_strategy=validation_strategy,
+        )
+        return result, fig_data
+
+    # --------------------------------------------------------------- random_forest_reg
+    if model_name == "random_forest_reg":
+        if y is None:
+            raise ValueError("random_forest_reg requires a numeric target y")
+        y_arr = np.array(y, dtype=float)
+        rfr = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        y_pred = cross_val_predict(rfr, X, y_arr, cv=cv).ravel()
+        metrics = _regression_metrics(y_arr, y_pred)
+
+        rfr.fit(X, y_arr)
+        importances = rfr.feature_importances_
+        top10_idx = np.argsort(importances)[::-1][:10]
+        if axis is not None:
+            selected = tuple(float(axis[i]) for i in top10_idx if i < len(axis))
+        else:
+            selected = tuple(int(i) for i in top10_idx)
+
+        fig_data = _wavelength_importance_figure(importances, axis)
+        fig_data.update(_predicted_vs_actual_figure(y_arr, y_pred))
+
+        result = AnalysisResult(
+            task_name=task_name,
+            model_name=model_name,
+            preprocessing=(preprocessing_applied,),
+            metrics=metrics,
+            predictions=tuple(float(v) for v in y_pred),
+            selected_features=selected,
+            figures=(),
+            validation_strategy=validation_strategy,
+        )
+        return result, fig_data
+
+    # --------------------------------------------------------------- logistic_regression
+    if model_name == "logistic_regression":
+        if y is None or task_name in _UNSUPERVISED_TASKS:
+            raise ValueError("logistic_regression requires class labels")
+        lr = LogisticRegression(C=1.0, max_iter=1000, random_state=42, solver="lbfgs")
+        y_pred = cross_val_predict(lr, X, y, cv=cv)
+        metrics = _classification_metrics(y, y_pred)
+        fig_data = _confusion_matrix_figure(y, y_pred)
+
+        # Coefficient-based wavelength importance (mean |coef| across classes)
+        lr.fit(X, y)
+        if lr.coef_.ndim == 2:
+            coef_abs = np.abs(lr.coef_).mean(axis=0)
+        else:
+            coef_abs = np.abs(lr.coef_[0])
+        top10_idx = np.argsort(coef_abs)[::-1][:10]
+        if axis is not None:
+            selected = tuple(float(axis[i]) for i in top10_idx if i < len(axis))
+        else:
+            selected = tuple(int(i) for i in top10_idx)
+
+        fi_data = _wavelength_importance_figure(coef_abs, axis)
+        fig_data.update(fi_data)
+
+        result = AnalysisResult(
+            task_name=task_name,
+            model_name=model_name,
+            preprocessing=(preprocessing_applied,),
+            metrics=metrics,
+            predictions=tuple(y_pred.tolist()),
+            selected_features=selected,
+            figures=(),
+            validation_strategy=validation_strategy,
+        )
+        return result, fig_data
+
     raise ValueError(f"Unknown model: {model_name!r}")
 
 
@@ -557,10 +680,15 @@ def run_cv_model_multi_seed(
     List of ``(AnalysisResult, figure_data_dict)`` tuples, one per seed.
     """
     results: list[tuple[AnalysisResult, dict]] = []
+    # Regression tasks must not use StratifiedKFold (which requires discrete labels)
+    _is_regression = task_name == "regression" or model_name in (
+        "plsr", "svr", "ridge", "random_forest_reg", "xgboost_reg"
+    )
+    _default_strategy = "grouped_kfold_5" if _is_regression else "stratified_kfold_5"
     for i in range(n_seeds):
         seed = base_seed + i
         cv = make_cv_splitter(
-            validation_strategy or "stratified_kfold_5", y, seed=seed
+            validation_strategy or _default_strategy, y, seed=seed
         )
         result, fig_data = run_cv_model(
             X, y, axis, model_name, cv, task_name, preprocessing_applied, validation_strategy, enable_shap
