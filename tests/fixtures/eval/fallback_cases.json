@@ -1,0 +1,52 @@
+[
+  {
+    "failed_model": "xgboost",
+    "failure_reason": "xgboost is not installed — missing import module package",
+    "acceptable_fallback": ["random_forest"]
+  },
+  {
+    "failed_model": "xgboost",
+    "failure_reason": "out of memory — oom error during training",
+    "acceptable_fallback": ["random_forest"]
+  },
+  {
+    "failed_model": "svm_rbf",
+    "failure_reason": "max_iter convergence not reached after 2000 iterations",
+    "acceptable_fallback": ["random_forest"]
+  },
+  {
+    "failed_model": "plsr",
+    "failure_reason": "regression task failed — invalid target shape",
+    "acceptable_fallback": ["svr", "ridge"]
+  },
+  {
+    "failed_model": "svr",
+    "failure_reason": "regression prediction error — data issue with nan values",
+    "acceptable_fallback": ["plsr"]
+  },
+  {
+    "failed_model": "pca_lda",
+    "failure_reason": "too few samples for LDA — sample_size insufficient for covariance estimation",
+    "acceptable_fallback": ["svm_rbf", "pca"]
+  },
+  {
+    "failed_model": "random_forest",
+    "failure_reason": "unknown runtime error during cross-validation",
+    "acceptable_fallback": ["svm_rbf"]
+  },
+  {
+    "failed_model": "ridge",
+    "failure_reason": "regression task — general model failure",
+    "acceptable_fallback": ["plsr", "svr"]
+  },
+  {
+    "failed_model": "logistic_regression",
+    "failure_reason": "convergence not reached — max_iter exceeded",
+    "acceptable_fallback": ["svm_rbf", "random_forest"]
+  },
+  {
+    "failed_model": "kmeans",
+    "failure_reason": "unsupported task — not implemented for this data type",
+    "acceptable_fallback": ["pca"]
+  }
+]

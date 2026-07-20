@@ -1,0 +1,100 @@
+Plan Quality Rubric — 1–5 Likert Scale
+
+Definition: Score plans produced by the agent's propose_analysis_plan tool for
+chemometric spectral analysis tasks (NIR/FTIR). Each score level is defined by
+specific observable criteria. Annotators (human + peer) assign 1–5; inter-rater
+agreement is reported as Cohen's kappa.
+
+----------------------------------------------------------------------
+1 — Nonsensical
+
+- Task name absent, blank, or completely wrong for the data
+  (e.g., "clustering" for a labeled regression dataset).
+- Preprocessing candidates entirely irrelevant to spectral data
+  (e.g., image morphological filters, text tokenization).
+- Validation strategy ignores sample size (e.g., 20-fold CV on n=10)
+  or is absent when supervised learning is intended.
+- Model families all inappropriate for the declared task type
+  (e.g., only regression models for a binary classification label).
+- No coherent reasoning or rationale present.
+
+----------------------------------------------------------------------
+2 — Partially Correct
+
+- Task name present but generic or subtly wrong
+  (e.g., "classification" without specifying binary vs. multi-class when the
+  dataset has only 2 classes and the distinction matters for metric choice).
+- Some relevant preprocessing listed but missing key spectral options
+  (e.g., standard scaler only, omits SNV/MSC for NIR).
+- Validation strategy present but ignores known grouping structure
+  (e.g., stratified KFold when replicate groups are flagged in metadata).
+- Model families mostly correct but includes clearly inappropriate ones
+  (e.g., image CNN in a tabular spectral workflow).
+
+----------------------------------------------------------------------
+3 — Adequate
+
+- Task name correct (e.g., "regression", "binary_classification").
+- Standard preprocessing candidates listed with at least one
+  modality-appropriate method: SNV or MSC for NIR;
+  baseline_correction or area_normalization for FTIR.
+- Reasonable validation strategy for the sample size
+  (e.g., stratified KFold or LOOCV for small n),
+  but may not explicitly account for known replicate groups.
+- Appropriate model families for the task type
+  (classification: RF, SVM, LR; regression: PLSR, Ridge, SVR).
+- Minor gaps or omissions that a practitioner could easily fill.
+
+----------------------------------------------------------------------
+4 — Good
+
+- Task name and subtask (binary/multi-class/regression/unsupervised) correct
+  and justified by the dataset characteristics (n_samples, n_classes, modality).
+- Preprocessing candidates modality-appropriate, ranked by expected efficacy,
+  with at least a brief rationale (e.g., "SNV first to remove baseline offsets").
+- Validation strategy accounts for sample size and, where data signals exist,
+  group structure (notes GroupKFold or LOGO when groups are detected).
+- Model families span both linear (Ridge, LogReg, PLSR) and non-linear
+  (RF, SVM) options appropriate to the task.
+- Minor improvements possible (e.g., no explicit Occam's-razor ordering,
+  or caveats only partially documented).
+
+----------------------------------------------------------------------
+5 — Expert-Quality
+
+- Task name precise, correct, and explicitly justified by dataset characteristics
+  (n_samples, n_classes, class distribution, modality, axis range).
+- Preprocessing candidates correct for modality, ordered by expected efficacy,
+  with rationale grounded in spectroscopic principles
+  (e.g., SNV before derivatives for NIR scatter correction).
+- Validation strategy:
+    - Accounts for small n (LOOCV or GroupLOO when n < 30).
+    - Addresses group structure if candidate_group_columns are present.
+    - Notes the GroupKFold→KFold limitation if applicable.
+    - Considers class imbalance (stratified splits or oversampling note).
+- Model families span Occam's-razor order (simpler first: Ridge/LogReg,
+  then PLSR/SVM, then RF/XGBoost) with a documented fallback plan.
+- Caveats explicitly documented:
+    - Small n risk (unreliable estimates).
+    - Class imbalance (if present).
+    - GroupKFold→KFold degradation (if applicable).
+    - Data leakage risk if replicate structure detected.
+- Human review checkpoint explicitly identified for ambiguous steps
+  (e.g., label disambiguation, fallback model approval).
+
+----------------------------------------------------------------------
+Auto-scoring (4-check heuristic for Layer-1 evaluation)
+
+The auto-score is computed from 4 boolean checks:
+  1. task_name is present and non-empty.
+  2. preprocessing_candidates includes at least one modality-relevant method
+     (snv, msc, sg_1st_deriv, sg_2nd_deriv, baseline_correction, area_normalization).
+  3. validation_strategy is present and non-empty.
+  4. model_families is non-empty.
+
+auto_score = mean(checks)  # range [0.0, 1.0]
+auto_pass  = auto_score >= 0.75  # i.e., ≥ 3/4 checks pass
+
+The auto-score is a floor, not a ceiling. A plan can auto-pass (3/4) and still
+score 3/5 on manual review because the strategy ignores group structure or the
+preprocessing lacks rationale. Manual peer scoring provides the full assessment.
