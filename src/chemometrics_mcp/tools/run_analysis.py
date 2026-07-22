@@ -84,6 +84,17 @@ def run(
     y: np.ndarray | None = np.array(dataset.labels) if dataset.labels is not None else None
     axis: np.ndarray | None = np.array(dataset.axis, dtype=float) if dataset.axis else None
 
+    # 2b. Extract group labels for GroupKFold / LOGO (keep replicates together).
+    groups: np.ndarray | None = None
+    if dataset.metadata:
+        for key in ("purity_group", "group", "sample_group", "group_id"):
+            vals = [m.get(key) for m in dataset.metadata]
+            if all(v is not None for v in vals):
+                groups = np.array([str(v) for v in vals])
+                break
+    if groups is None and dataset.labels is not None:
+        groups = np.array([str(v) for v in dataset.labels])
+
     # 3. Build preprocessing candidates list
     preprocessing_candidates = (
         list(approved_plan.preprocessing_candidates)
@@ -93,13 +104,18 @@ def run(
 
     task_name = approved_plan.task_name or "unsupervised_exploration"
 
-    # 4. Build CV splitter — regression must not use StratifiedKFold
+    # 4. Build CV splitter — regression must not use StratifiedKFold.
+    # With few unique groups (<=10), prefer LOGO over GroupKFold(5).
     _is_regression = task_name == "regression"
     _default_cv_strategy = "grouped_kfold_5" if _is_regression else "stratified_kfold_5"
-    cv = modeling.make_cv_splitter(
-        approved_plan.validation_strategy or _default_cv_strategy,
-        y,
-    )
+    _strategy = approved_plan.validation_strategy or _default_cv_strategy
+    if (
+        _strategy in {"grouped_kfold_5", "grouped_kfold_3", "group_kfold"}
+        and groups is not None
+        and len(set(groups.tolist())) <= 10
+    ):
+        _strategy = "leave_one_group_out"
+    cv = modeling.make_cv_splitter(_strategy, y)
 
     run_id = request.run_id or make_run_id(slug="run")
     artifact_dir = ensure_run_dir(run_id, runs_root)
@@ -146,7 +162,8 @@ def run(
                     cv,
                     task_name,
                     preprocessing_method,
-                    approved_plan.validation_strategy,
+                    _strategy,
+                    groups=groups,
                 )
             except (ValueError, Exception) as exc:  # noqa: BLE001
                 failed_models.append(f"{preprocessing_method}/{model_name}")
@@ -205,6 +222,8 @@ def run(
                 warnings=raw_result.warnings,
                 interpretation=raw_result.interpretation,
                 run_metadata=raw_result.run_metadata,
+                validation_strategy=_strategy,
+                interpretation_results=raw_result.interpretation_results,
             )
             results.append(final_result)
 
@@ -227,8 +246,9 @@ def run(
                         model_name,
                         task_name,
                         preprocessing_method,
-                        approved_plan.validation_strategy,
+                        _strategy,
                         n_seeds=3,
+                        groups=groups,
                     )
                     for ms_result, _ in ms_results:
                         multi_seed_results.append(ms_result)

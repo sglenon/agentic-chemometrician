@@ -18,9 +18,14 @@ from chemometrics_contracts import (
     ValidationWarning,
 )
 
+from chemometrics_mcp.core import modalities
+
 
 _REPLICATE_LEAKAGE_THRESHOLD = 0.80
-_GROUPED_STRATEGIES = frozenset({"grouped_kfold_5", "grouped_kfold_3", "group_kfold"})
+_GROUPED_STRATEGIES = frozenset({
+    "grouped_kfold_5", "grouped_kfold_3", "group_kfold",
+    "leave_one_group_out", "logo",
+})
 
 
 def check_suspicious_metrics(result: AnalysisResult) -> ValidationWarning | None:
@@ -362,9 +367,6 @@ def check_split_instability(results: Sequence[AnalysisResult]) -> list[Validatio
     return warnings
 
 
-_FTIR_SPECIFIC_PREPROCESSING = frozenset({"baseline_correction", "area_normalization"})
-
-
 def check_modality_consistency(
     results: Sequence[AnalysisResult],
     dataset: SpectralDataset | None,
@@ -372,20 +374,25 @@ def check_modality_consistency(
     if dataset is None or dataset.modality is None:
         return []
 
-    modality = dataset.modality.upper()
+    modality = dataset.modality
+    allowed = modalities.allowed_preprocessing(modality)
+    if allowed is None:
+        # Unknown modality: no profile to check against.
+        return []
+
     warnings: list[ValidationWarning] = []
 
     for result in results:
         for method in result.preprocessing:
-            if modality == "NIR" and method in _FTIR_SPECIFIC_PREPROCESSING:
+            if method not in allowed:
                 warnings.append(
                     ValidationWarning(
                         code="modality_preprocessing_mismatch",
                         severity="warning",
                         category="preprocessing",
                         message=(
-                            f"Preprocessing method {method!r} is FTIR-specific "
-                            f"but applied to NIR data in model {result.model_name!r}."
+                            f"Preprocessing method {method!r} is not appropriate "
+                            f"for {modality} data in model {result.model_name!r}."
                         ),
                         details={
                             "modality": modality,

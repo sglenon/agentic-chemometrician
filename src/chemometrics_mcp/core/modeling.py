@@ -20,7 +20,9 @@ from sklearn.metrics import (
     r2_score,
 )
 from sklearn.model_selection import (
+    GroupKFold,
     KFold,
+    LeaveOneGroupOut,
     LeaveOneOut,
     StratifiedKFold,
     cross_val_predict,
@@ -50,8 +52,9 @@ def make_cv_splitter(validation_strategy: str, y: np.ndarray | None = None, seed
     ----------
     validation_strategy:
         One of ``"stratified_kfold_5"``, ``"stratified_kfold_3"``,
-        ``"grouped_kfold_5"``, ``"loocv"``, or any other string (falls back
-        to ``KFold(n_splits=5)``).
+        ``"grouped_kfold_5"``, ``"grouped_kfold_3"``, ``"group_kfold"``,
+        ``"leave_one_group_out"``, ``"logo"``, ``"loocv"``, or any other
+        string (falls back to ``KFold(n_splits=5)``).
     y:
         Optional label array (not currently used but kept for future group support).
     seed:
@@ -61,11 +64,31 @@ def make_cv_splitter(validation_strategy: str, y: np.ndarray | None = None, seed
         return StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
     if validation_strategy == "stratified_kfold_3":
         return StratifiedKFold(n_splits=3, shuffle=True, random_state=seed)
-    if validation_strategy == "grouped_kfold_5":
-        return KFold(n_splits=5, shuffle=True, random_state=seed)
+    if validation_strategy in {"grouped_kfold_5", "group_kfold"}:
+        return GroupKFold(n_splits=5)
+    if validation_strategy == "grouped_kfold_3":
+        return GroupKFold(n_splits=3)
+    if validation_strategy in {"leave_one_group_out", "logo"}:
+        return LeaveOneGroupOut()
     if validation_strategy == "loocv":
         return LeaveOneOut()
     return KFold(n_splits=5, shuffle=True, random_state=seed)
+
+
+def _cv_needs_groups(cv) -> bool:
+    return isinstance(cv, (GroupKFold, LeaveOneGroupOut))
+
+
+def _cross_val_predict(estimator, X, y, cv, groups=None):
+    """cross_val_predict wrapper that passes groups when the splitter requires them."""
+    if _cv_needs_groups(cv):
+        if groups is None:
+            raise ValueError(
+                f"{type(cv).__name__} requires groups, but groups is None. "
+                "Pass group labels (e.g. purity_group) to avoid replicate leakage."
+            )
+        return cross_val_predict(estimator, X, y, cv=cv, groups=groups)
+    return cross_val_predict(estimator, X, y, cv=cv)
 
 
 def _classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
@@ -133,6 +156,7 @@ def run_cv_model(
     preprocessing_applied: str,
     validation_strategy: str | None = None,
     enable_shap: bool = False,
+    groups: np.ndarray | None = None,
 ) -> tuple[AnalysisResult, dict]:
     """Run a model with cross-validation and return (AnalysisResult, figure_data_dict).
 
@@ -176,7 +200,7 @@ def run_cv_model(
             decision_function_shape="ovr",
             random_state=42,
         )
-        y_pred = cross_val_predict(clf, X, y, cv=cv)
+        y_pred = _cross_val_predict(clf, X, y, cv=cv, groups=groups)
         metrics = _classification_metrics(y, y_pred)
         fig_data = _confusion_matrix_figure(y, y_pred)
 
@@ -213,7 +237,7 @@ def run_cv_model(
         if y is None or task_name in _UNSUPERVISED_TASKS:
             raise ValueError("random_forest requires class labels")
         clf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        y_pred = cross_val_predict(clf, X, y, cv=cv)
+        y_pred = _cross_val_predict(clf, X, y, cv=cv, groups=groups)
         metrics = _classification_metrics(y, y_pred)
 
         # Feature importances: fit on full data for importance extraction
@@ -275,7 +299,7 @@ def run_cv_model(
                 ("lda", LinearDiscriminantAnalysis()),
             ]
         )
-        y_pred = cross_val_predict(pipeline, X, y, cv=cv)
+        y_pred = _cross_val_predict(pipeline, X, y, cv=cv, groups=groups)
         metrics = _classification_metrics(y, y_pred)
 
         # Per-fold accuracy for figure data
@@ -357,7 +381,7 @@ def run_cv_model(
         y_arr = np.array(y, dtype=float)
         n_components = min(10, n_features, n_samples - 1)
         plsr = PLSRegression(n_components=n_components)
-        y_pred = cross_val_predict(plsr, X, y_arr, cv=cv).ravel()
+        y_pred = _cross_val_predict(plsr, X, y_arr, cv=cv, groups=groups).ravel()
         metrics = _regression_metrics(y_arr, y_pred)
 
         # selected_features: top-5 by absolute loading magnitude (first component)
@@ -404,7 +428,7 @@ def run_cv_model(
             raise ValueError("svr requires a numeric target y")
         y_arr = np.array(y, dtype=float)
         svr = SVR(kernel="rbf", C=1.0, gamma="scale")
-        y_pred = cross_val_predict(svr, X, y_arr, cv=cv).ravel()
+        y_pred = _cross_val_predict(svr, X, y_arr, cv=cv, groups=groups).ravel()
         metrics = _regression_metrics(y_arr, y_pred)
         fig_data = _predicted_vs_actual_figure(y_arr, y_pred)
 
@@ -451,7 +475,7 @@ def run_cv_model(
             learning_rate=0.1,
             random_state=42,
         )
-        y_pred_enc = cross_val_predict(clf, X, y_enc, cv=cv)
+        y_pred_enc = _cross_val_predict(clf, X, y_enc, cv=cv, groups=groups)
         y_pred = le.inverse_transform(y_pred_enc)
         metrics = _classification_metrics(y, y_pred)
 
@@ -514,7 +538,7 @@ def run_cv_model(
             random_state=42,
             eval_metric="rmse",
         )
-        y_pred = cross_val_predict(reg, X, y_arr, cv=cv).ravel()
+        y_pred = _cross_val_predict(reg, X, y_arr, cv=cv, groups=groups).ravel()
         metrics = _regression_metrics(y_arr, y_pred)
         fig_data = _predicted_vs_actual_figure(y_arr, y_pred)
 
@@ -552,7 +576,7 @@ def run_cv_model(
             raise ValueError("ridge requires a numeric target y")
         y_arr = np.array(y, dtype=float)
         ridge_m = Ridge(alpha=1.0)
-        y_pred = cross_val_predict(ridge_m, X, y_arr, cv=cv).ravel()
+        y_pred = _cross_val_predict(ridge_m, X, y_arr, cv=cv, groups=groups).ravel()
         metrics = _regression_metrics(y_arr, y_pred)
 
         ridge_m.fit(X, y_arr)
@@ -584,7 +608,7 @@ def run_cv_model(
             raise ValueError("random_forest_reg requires a numeric target y")
         y_arr = np.array(y, dtype=float)
         rfr = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        y_pred = cross_val_predict(rfr, X, y_arr, cv=cv).ravel()
+        y_pred = _cross_val_predict(rfr, X, y_arr, cv=cv, groups=groups).ravel()
         metrics = _regression_metrics(y_arr, y_pred)
 
         rfr.fit(X, y_arr)
@@ -615,7 +639,7 @@ def run_cv_model(
         if y is None or task_name in _UNSUPERVISED_TASKS:
             raise ValueError("logistic_regression requires class labels")
         lr = LogisticRegression(C=1.0, max_iter=1000, random_state=42, solver="lbfgs")
-        y_pred = cross_val_predict(lr, X, y, cv=cv)
+        y_pred = _cross_val_predict(lr, X, y, cv=cv, groups=groups)
         metrics = _classification_metrics(y, y_pred)
         fig_data = _confusion_matrix_figure(y, y_pred)
 
@@ -661,6 +685,7 @@ def run_cv_model_multi_seed(
     base_seed: int = 42,
     group_column: str | None = None,
     enable_shap: bool = False,
+    groups: np.ndarray | None = None,
 ) -> list[tuple[AnalysisResult, dict]]:
     """Run the same model with multiple random seeds for split-instability analysis.
 
@@ -674,6 +699,8 @@ def run_cv_model_multi_seed(
         Starting seed; subsequent runs use ``base_seed + i``. Defaults to 42.
     group_column:
         Reserved for future grouped CV support (currently unused).
+    groups:
+        Optional per-sample group labels for GroupKFold / LOGO.
 
     Returns
     -------
@@ -691,7 +718,8 @@ def run_cv_model_multi_seed(
             validation_strategy or _default_strategy, y, seed=seed
         )
         result, fig_data = run_cv_model(
-            X, y, axis, model_name, cv, task_name, preprocessing_applied, validation_strategy, enable_shap
+            X, y, axis, model_name, cv, task_name, preprocessing_applied,
+            validation_strategy, enable_shap, groups=groups,
         )
         results.append((result, fig_data))
     return results

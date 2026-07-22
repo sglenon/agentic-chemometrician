@@ -21,11 +21,14 @@ from typing import Any
 import mcp.server.stdio
 import mcp.types as types
 from mcp.server import Server
+from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.models import InitializationOptions
 
 from chemometrics_contracts import (
     AnalysisPlan,
+    AnalysisResult,
     AnalysisRun,
+    ArtifactReference,
     DatasetInspection,
     DatasetProfile,
     GenerateReportRequest,
@@ -45,6 +48,7 @@ from chemometrics_contracts import (
     ToolResponse,
     ValidateResultsRequest,
     ValidationSummary,
+    ValidationWarning,
 )
 from chemometrics_mcp.tools import (
     generate_report,
@@ -407,7 +411,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         return _tool_result(run_analysis.run(request, runs_root=_RUNS_ROOT))
 
     if name == "validate_results":
-        from chemometrics_contracts import AnalysisResult, ValidationWarning, SpectralDataset, DatasetInspection
         from chemometrics_mcp.tools.run_analysis import _spectral_dataset_from_dict
 
         raw_results = arguments.get("results", [])
@@ -454,8 +457,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         return _tool_result(validate_results.run(request, runs_root=_RUNS_ROOT))
 
     if name == "select_best_model":
-        from chemometrics_contracts import AnalysisResult, ValidationWarning, ValidationSummary
-
         raw_results = arguments.get("results", [])
         results = tuple(
             AnalysisResult(
@@ -507,7 +508,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         return _tool_result(recommend_next_model.run(request, runs_root=_RUNS_ROOT))
 
     if name == "interpret_results":
-        from chemometrics_contracts import AnalysisResult, ValidationWarning, ValidationSummary
         from chemometrics_mcp.tools.run_analysis import _spectral_dataset_from_dict
 
         raw_results = arguments.get("results", [])
@@ -557,7 +557,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
 
     if name == "generate_report":
         from chemometrics_contracts import (
-            AnalysisResult,
             RunMetadata,
             InterpretationSummary,
         )
@@ -750,7 +749,7 @@ async def main() -> None:
                 server_name="chemometrics-mcp",
                 server_version="0.1.0",
                 capabilities=server.get_capabilities(
-                    notification_options=None,
+                    notification_options=NotificationOptions(),
                     experimental_capabilities={},
                 ),
             ),
