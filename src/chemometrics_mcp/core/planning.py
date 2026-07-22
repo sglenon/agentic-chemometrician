@@ -12,6 +12,8 @@ from chemometrics_contracts import (
     ValidationWarning,
 )
 
+from chemometrics_mcp.core import modalities
+
 # ---------------------------------------------------------------------------
 # Task inference
 # ---------------------------------------------------------------------------
@@ -55,16 +57,14 @@ def infer_task_name(
 # Preprocessing recommendations
 # ---------------------------------------------------------------------------
 
-_STANDARD_PREPROCESSING = ("snv", "msc", "sg_1st_deriv", "sg_2nd_deriv")
-_FTIR_EXTRA = ("baseline_correction", "area_normalization")
-
-
 def recommend_preprocessing(inspection: DatasetInspection) -> list[str]:
-    """Return NIR/spectral preprocessing candidates in priority order."""
-    candidates: list[str] = list(_STANDARD_PREPROCESSING)
-    if inspection.modality and inspection.modality.upper() == "FTIR":
-        candidates.extend(_FTIR_EXTRA)
-    return candidates
+    """Return spectral preprocessing candidates in priority order.
+
+    Candidates come from the dataset's modality profile
+    (:mod:`chemometrics_mcp.core.modalities`); unknown modalities fall back to
+    the universal baseline.
+    """
+    return list(modalities.preprocessing_candidates(inspection.modality))
 
 
 # ---------------------------------------------------------------------------

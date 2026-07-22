@@ -34,8 +34,7 @@ from chemometrics_contracts import (
     ValidationWarning,
 )
 
-_NIR_WAVELENGTH_RANGE = (700.0, 2500.0)
-_FTIR_WAVENUMBER_RANGE = (400.0, 4000.0)
+from chemometrics_mcp.core import modalities
 
 _CANDIDATE_LABEL_PATTERNS = re.compile(
     r"(label|class|category|type|material|product|description|grade|sample.name)",
@@ -50,13 +49,8 @@ _NUMERIC_DTYPE_KINDS = frozenset(("f", "i", "u"))
 
 
 def _infer_modality(axis_values: np.ndarray) -> str | None:
-    axis_min = float(axis_values.min())
-    axis_max = float(axis_values.max())
-    if _NIR_WAVELENGTH_RANGE[0] <= axis_min and axis_max <= _NIR_WAVELENGTH_RANGE[1]:
-        return "NIR"
-    if _FTIR_WAVENUMBER_RANGE[0] <= axis_min and axis_max <= _FTIR_WAVENUMBER_RANGE[1]:
-        return "FTIR"
-    return None
+    """Infer modality from the axis span via the modality-profile registry."""
+    return modalities.infer_modality(axis_values)
 
 
 def _candidate_label_cols(metadata: pd.DataFrame) -> list[str]:
@@ -608,8 +602,10 @@ def load_ftir_real(
       loaded.
     - **Unknown stems**: filename stems not in the manifest receive the label
       ``"unknown"`` and trigger an inspection warning.
-    - Transmittance values above 100 %T (instrument artefacts / noise) are
-      clipped to [0, 110] before interpolation but not removed.
+    - Transmittance values outside the FTIR %T domain [0, 100] (instrument
+      artefacts / un-ratioed single-beam data) are clipped into range after
+      interpolation, per the modality profile in :mod:`chemometrics_mcp.core.modalities`,
+      and a ``value_domain_clipped`` warning is recorded.
     """
     dir_path = Path(data_dir)
     if not dir_path.exists():
@@ -685,16 +681,21 @@ def load_ftir_real(
     n_samples, n_features = X.shape
 
     # Standard data quality checks
+    modality = modality_override or "FTIR"
+
+    # Enforce the modality's value domain (e.g. clip %T into [0, 100]) before
+    # any downstream use, and record what was done.
+    X, domain_warning = modalities.enforce_value_domain(X, modality)
+
     for check in [
         _check_non_numeric(X),
         _check_missing_values(X),
+        domain_warning,
         _check_small_sample(n_samples),
         _check_duplicate_ids(sample_ids),
     ]:
         if check is not None:
             warnings.append(check)
-
-    modality = modality_override or "FTIR"
 
     source_ref = ArtifactReference(
         kind="source_directory",

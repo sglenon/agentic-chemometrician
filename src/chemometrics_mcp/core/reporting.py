@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         ValidationSummary,
     )
 
+from chemometrics_mcp.core import modalities
 from chemometrics_mcp.core.fallback import recommend_fallback
 
 _HUMAN_REVIEW_CHECKLIST = """\
@@ -184,17 +185,20 @@ def build_markdown_report(
     lines.append("")
 
     # 5b. Cross-Modality Comparison
-    _ftir_specific = {"baseline_correction", "area_normalization"}
-    has_ftir_prep = False
+    # "Specific" preprocessing = anything beyond the universal baseline
+    # (e.g. baseline_correction/area_normalization). A run that mixes
+    # modality-specific and universal-only results spans modalities.
+    _universal = set(modalities.universal_preprocessing()) | {"raw"}
+    has_specific_prep = False
     has_standard_only = False
     for result in run.results:
         prep_set = set(result.preprocessing)
-        if prep_set & _ftir_specific:
-            has_ftir_prep = True
-        if prep_set and not (prep_set & _ftir_specific):
+        if prep_set - _universal:
+            has_specific_prep = True
+        if prep_set and prep_set <= _universal:
             has_standard_only = True
 
-    cross_modality_detected = has_ftir_prep and has_standard_only
+    cross_modality_detected = has_specific_prep and has_standard_only
     if cross_modality_detected:
         lines.append("## Cross-Modality Comparison")
         lines.append(
