@@ -1,0 +1,83 @@
+% sections/02_related_work.tex
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Agentic LLM Tool Use}
+
+The ReAct framework~\citep{yao2023react} established the interleaved
+reasoning-and-acting paradigm for LLMs, demonstrating that grounding language
+model generation in external tool calls substantially reduces hallucination
+compared to chain-of-thought prompting alone.
+Toolformer~\citep{schick2023toolformer} showed that models could learn
+autonomously when and how to call APIs, while Gorilla~\citep{patil2023gorilla}
+extended this to a large catalogue of real-world APIs.
+ToolLLM~\citep{qin2024toolllm} provided a systematic training and evaluation
+framework for tool-augmented LLMs at scale.
+
+The Model Context Protocol (MCP)~\citep{anthropic2024mcp} standardizes the
+host/server/client architecture for tool-augmented LLMs, providing a JSON-RPC
+transport with schema-described tool inputs and outputs.
+Our work builds on MCP's architecture: the \texttt{chemometrics-mcp} server
+registers tools via \texttt{list\_tools()} and dispatches calls via
+\texttt{call\_tool()}, with all contract objects serialized as JSON through
+MCP's \texttt{TextContent} transport.
+
+Our angle differs from prior work: rather than optimizing tool selection or
+tool-call frequency, we focus on making individual tool \emph{outputs}
+scientifically trustworthy through typed contracts and deterministic core
+logic, and on routing non-routine decisions to human experts rather than
+resolving them autonomously.
+
+\subsection{Machine Learning for Spectroscopy and Chemometrics}
+
+Classical chemometrics relies on Partial Least Squares Regression
+(PLSR)~\citep{wold1984pls} and Principal Component Analysis (PCA) for
+dimensionality reduction and supervised prediction from high-dimensional
+spectra.
+Standard preprocessing pipelines---Standard Normal Variate (SNV), Multiplicative
+Scatter Correction (MSC), Savitzky--Golay derivatives---are well
+established~\citep{rinnan2009review}.
+More recently, deep learning approaches have been applied to spectroscopic
+data~\citep{chen2021deep,mishra2021deepchemometrics}, though small-sample
+constraints (typically $n < 200$) limit the advantage of deep models over
+classical linear methods on most industrial calibration problems.
+
+The Agentic Chemometrician targets the classical regime: NIR and FTIR datasets
+with $n = 20$--$200$ samples, where leakage detection and principled
+cross-validation strategy matter more than model capacity.
+
+\subsection{Data Leakage in Machine Learning}
+
+\citet{kaufman2012leakage} provided a formal taxonomy of data leakage in ML,
+distinguishing feature leakage (label information embedded in predictors),
+train/test contamination (overlapping splits), and temporal leakage
+(future information in training data).
+Replicate leakage in spectroscopy is a form of train/test contamination:
+the replicate structure acts as a proxy for the label, inflating
+cross-validation estimates when it is not respected by the splitting strategy.
+
+\citet{kapoor2023leakage} systematically documented the scale of leakage-driven
+irreproducibility in published ML literature across multiple scientific domains.
+They found that leakage is often invisible at publication time because it
+produces plausible rather than obviously pathological results.
+
+Our work operationalizes leakage detection as a first-class gating tool in
+the analysis pipeline, rather than as a post-hoc audit.
+The \texttt{validate\_results} tool fires \texttt{replicate\_leakage} and
+\texttt{group\_leakage\_risk} warnings automatically and blocks final model
+selection from proceeding without either warning resolution or explicit human
+override.
+
+\subsection{Hallucination in LLMs}
+
+\citet{ji2023survey} surveyed hallucination in natural language generation,
+distinguishing intrinsic hallucination (contradiction of source material) from
+extrinsic hallucination (fabrication of content with no source support).
+In the scientific analysis context, the most dangerous form is extrinsic
+metric hallucination: the agent reports a computed metric value that was
+never actually computed.
+We address this by structurally separating computation (in the deterministic
+\texttt{core/} layer) from reporting (in the MCP tool layer), ensuring that
+every metric in a \texttt{ToolResponse} payload traces to an
+\texttt{AnalysisResult} object produced by actual sklearn model fitting.

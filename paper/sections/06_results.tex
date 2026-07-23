@@ -1,0 +1,166 @@
+% sections/06_results.tex
+
+\section{Results}
+\label{sec:results}
+
+All numeric cells in this section are placeholders populated from the
+Layer-1 harness.
+Run the harness for each scenario (e.g.\ \texttt{python scripts/run\_evaluation.py --scenario s1 --seed 42}; repeat for s1..s4)
+and replace each \texttt{\textbackslash TODO\{...\}} with the printed value.
+
+\subsection{Naive vs.\ Grouped Cross-Validation Gap}
+\label{sec:cv_gap}
+
+Table~\ref{tab:cv_gap} reports the mean accuracy (classification) or $R^2$
+(regression) under naive stratified KFold versus group-aware
+GroupKFold / LeaveOneGroupOut, for each scenario.
+Figure~\ref{fig:cv_gap} visualizes the per-scenario gap as a bar chart.
+A positive gap indicates that naive CV overestimates performance due to
+replicate leakage.
+
+\begin{table}[ht]
+  \centering
+  \caption{Naive KFold vs.\ grouped CV performance gap. Higher gap = more leakage.}
+  \label{tab:cv_gap}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Scenario & Metric & Naive CV & Grouped CV & Gap \\
+    \midrule
+    S1 (wear-layer) & $R^2$    & TODO & TODO & TODO \\
+    S2 (species)    & Accuracy & TODO & TODO & TODO \\
+    S3 (vinyl/wood) & Accuracy & TODO & TODO & TODO \\
+    S4 (FTIR purity)& Accuracy & TODO & TODO & TODO \\
+    \midrule
+    Mean gap        &          &      &      & \TODO{mean gap across scenarios} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \IfFileExists{figures/fig2_cv_gap.pdf}{%
+    \includegraphics[width=0.75\linewidth]{figures/fig2_cv_gap}%
+  }{%
+    \fbox{\parbox{0.9\linewidth}{\centering\vspace{2cm}\TODO{figure: fig2\_cv\_gap}\vspace{2cm}}}%
+  }
+  \caption{
+    Naive KFold vs.\ grouped CV accuracy/R\textsuperscript{2} by scenario.
+    Error bars show inter-fold standard deviation.
+    \textbf{[TODO: generate from harness run]}
+  }
+  \label{fig:cv_gap}
+\end{figure}
+
+\subsection{Leakage Detection Scorecard}
+\label{sec:leakage_results}
+
+Table~\ref{tab:leakage} reports TPR, FPR, and precision of the leakage
+detector on the 6 test fixtures (3 positive, 3 clean).
+
+\begin{table}[ht]
+  \centering
+  \caption{Leakage detection performance on 6 fixtures (3 positive, 3 clean).
+    Positive = leakage present; clean = no leakage.}
+  \label{tab:leakage}
+  \begin{tabular}{lrrr}
+    \toprule
+    Check type & TPR & FPR & Precision \\
+    \midrule
+    replicate\_leakage    & \TODO{TPR} & \TODO{FPR} & \TODO{Precision} \\
+    group\_leakage\_risk  & \TODO{TPR} & \TODO{FPR} & \TODO{Precision} \\
+    Combined              & \TODO{TPR} & \TODO{FPR} & \TODO{Precision} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{HITL Compliance, Fallback, and Plan Quality}
+\label{sec:hitl_results}
+
+Table~\ref{tab:hitl} summarizes HITL compliance, fallback correctness,
+and plan quality auto-score across the four scenarios.
+
+\begin{table}[ht]
+  \centering
+  \caption{HITL compliance, fallback correctness, and plan quality auto-score.}
+  \label{tab:hitl}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Scenario & HITL Compliance & Fallback Correct & Plan Auto-score & Plan Auto-pass \\
+    \midrule
+    S1 & TODO & TODO & TODO & TODO \\
+    S2 & TODO & TODO & TODO & TODO \\
+    S3 & TODO & TODO & TODO & TODO \\
+    S4 & TODO & TODO & TODO & TODO \\
+    \midrule
+    Mean & \TODO{mean} & \TODO{mean} & \TODO{mean} & \TODO{mean} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Ablation Deltas}
+\label{sec:ablation}
+
+Table~\ref{tab:ablation} reports the delta in leakage TPR, HITL compliance,
+and plan quality auto-score for each ablation configuration relative to the
+full system.
+Negative deltas indicate degradation.
+
+\begin{table}[ht]
+  \centering
+  \caption{Ablation deltas relative to the full system.
+    $\Delta$TPR: change in leakage detection TPR.
+    $\Delta$HITL: change in HITL compliance rate.
+    $\Delta$Plan: change in plan quality auto-score.}
+  \label{tab:ablation}
+  \begin{tabular}{lrrr}
+    \toprule
+    Configuration       & $\Delta$TPR & $\Delta$HITL & $\Delta$Plan \\
+    \midrule
+    Full (baseline)     & 0 & 0 & 0 \\
+    no\_guardrails      & TODO & TODO & TODO \\
+    no\_validation      & TODO & TODO & TODO \\
+    no\_memory          & TODO & TODO & TODO \\
+    deterministic\_off  & TODO & TODO & TODO \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Effort}
+\label{sec:effort}
+
+Each full-pipeline scenario run (inspect $\to$ report) requires 7 tool calls
+(one per pipeline stage).
+Wall-clock time per scenario at seed = 42 on a laptop CPU is
+\TODO{per-scenario wall-clock seconds}.
+No HITL decision points are incurred in Layer-1 (the harness passes approval
+automatically); Layer-2 HITL effort is future work.
+
+\subsection{Case Study: FTIR Purity (Antigravity-Final Run)}
+\label{sec:casestudy}
+
+To illustrate the pipeline behavior on a real FTIR dataset, we describe the
+\texttt{antigravity-ftir-purity-run-final} run, which was executed outside the
+Layer-1 harness using the MCP server with a human operator approving each gate.
+
+The run executed 30 model--preprocessing combinations: 6 preprocessing methods
+(SNV, MSC, first-derivative Savitzky--Golay, second-derivative Savitzky--Golay,
+baseline correction, area normalization) $\times$ 5 model families
+(SVM-RBF, Random Forest, Logistic Regression, XGBoost, and PCA-LDA).
+The PCA-LDA models failed across all 6 preprocessing conditions due to
+singular covariance matrices on this small-$n$ dataset; these were recorded in
+\texttt{failed\_models} and surfaced as fallback candidates.
+
+The best-measured accuracy was \textbf{0.905} (SVM-RBF or Random Forest with
+the best preprocessing; exact model details available in the run artifact at
+\texttt{runs/antigravity-ftir-purity-run-final/artifacts/run\_summary.json}).
+Despite this strong accuracy, the validation step set
+\texttt{validation\_passed = False} because 9 validation warnings were raised,
+including small-sample-per-class warnings (the $\approx$20-sample, 7-group
+dataset makes per-class counts sparse) and class-imbalance flags.
+
+Consequently, \texttt{select\_best\_model} set
+\texttt{approval\_required = True}, correctly routing the selection to the
+human operator rather than autonomously committing to the 0.905 model.
+This case study demonstrates the core HITL design: a high metric does not
+suppress validation warnings, and validation warnings do not suppress the
+metric---both are surfaced, and the human decides.

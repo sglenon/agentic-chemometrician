@@ -1,0 +1,155 @@
+% references.bib — The Agentic Chemometrician
+% TODO: verify all fields; entries marked \TODO where bib data is uncertain.
+
+% --- Agentic LLM tool-use ---
+
+@inproceedings{yao2023react,
+  title     = {{ReAct}: Synergizing Reasoning and Acting in Language Models},
+  author    = {Yao, Shunyu and Zhao, Jeffrey and Yu, Dian and Du, Nan and Shafran, Izhak and Narasimhan, Karthik and Cao, Yuan},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2023},
+  url       = {https://arxiv.org/abs/2210.03629}
+}
+
+@article{schick2023toolformer,
+  title   = {Toolformer: Language Models Can Teach Themselves to Use Tools},
+  author  = {Schick, Timo and Dwivedi-Yu, Jane and Dess{\`i}, Roberto and Raileanu, Roberta and Lomeli, Maria and Zettlemoyer, Luke and Cancedda, Nicola and Scialom, Thomas},
+  journal = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year    = {2023},
+  url     = {https://arxiv.org/abs/2302.04761}
+}
+
+@inproceedings{patil2023gorilla,
+  title     = {Gorilla: Large Language Model Connected with Massive {API}s},
+  author    = {Patil, Shishir G. and Zhang, Tianjun and Wang, Xin and Gonzalez, Joseph E.},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023},
+  url       = {https://arxiv.org/abs/2305.15334}
+}
+
+@inproceedings{qin2024toolllm,
+  title     = {{ToolLLM}: Facilitating Large Language Models to Master 16000+ Real-world {API}s},
+  author    = {Qin, Yujia and Liang, Shengding and Ye, Yining and Zhu, Kunlun and Yan, Lan and Lu, Yaxi and Lin, Yankai and Cong, Xin and Tang, Xiangru and Qian, Bill and Zhao, Sihan and Hong, Lauren and Tian, Runchu and Xie, Ruobing and Zhou, Jie and Gerstein, Mark and Li, Dahai and Liu, Zhiyuan and Sun, Maosong},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  url       = {https://arxiv.org/abs/2307.16789}
+}
+
+% --- Model Context Protocol ---
+
+@misc{anthropic2024mcp,
+  title        = {Model Context Protocol},
+  author       = {{Anthropic}},
+  year         = {2024},
+  howpublished = {\url{https://modelcontextprotocol.io}},
+  note         = {Accessed 2026-07-23}
+}
+
+% --- ML for spectroscopy / chemometrics ---
+
+@incollection{wold1984pls,
+  title     = {The Multivariate Calibration Problem in Chemistry Solved by the {PLS} Method},
+  author    = {Wold, Svante and Martens, Harald and Wold, Herman},
+  booktitle = {Matrix Pencils},
+  pages     = {286--293},
+  publisher = {Springer},
+  year      = {1984},
+  note      = {TODO: verify exact volume/pages}
+}
+
+@book{martens1989multivariate,
+  title     = {Multivariate Calibration},
+  author    = {Martens, Harald and N{\ae}s, Tormod},
+  publisher = {Wiley},
+  year      = {1989}
+}
+
+@article{rinnan2009review,
+  title   = {Review of the Most Common Pre-processing Techniques for Near-Infrared Spectra},
+  author  = {Rinnan, {\AA}smund and van den Berg, Frans and Engelsen, S{\o}ren Balling},
+  journal = {TrAC Trends in Analytical Chemistry},
+  volume  = {28},
+  number  = {10},
+  pages   = {1201--1222},
+  year    = {2009},
+  doi     = {10.1016/j.trac.2009.07.007}
+}
+
+@article{pasquini2003nir,
+  title   = {Near Infrared Spectroscopy: Fundamentals, Practical Aspects and Analytical Applications},
+  author  = {Pasquini, Celio},
+  journal = {Journal of the Brazilian Chemical Society},
+  volume  = {14},
+  number  = {2},
+  pages   = {198--219},
+  year    = {2003},
+  doi     = {10.1590/S0103-50532003000200006}
+}
+
+@article{chen2021deep,
+  title   = {Deep Learning for Spectroscopic Analysis: A Review},
+  author  = {Chen, Yue and Peng, Yao and Li, Xinzhi and Tang, Chuanjun},
+  journal = {Chemometrics and Intelligent Laboratory Systems},
+  volume  = {215},
+  pages   = {104352},
+  year    = {2021},
+  note    = {TODO: verify exact volume/pages/doi},
+  doi     = {10.1016/j.chemolab.2021.104352}
+}
+
+@article{mishra2021deepchemometrics,
+  title   = {New Data Preprocessing Trends Based on Ensemble of Multiple Preprocessing Techniques},
+  author  = {Mishra, Puneet and Biancolillo, Alessandra and Roger, Jean Michel and Marini, Federico and Rutledge, Douglas N.},
+  journal = {TrAC Trends in Analytical Chemistry},
+  volume  = {132},
+  pages   = {116045},
+  year    = {2021},
+  doi     = {10.1016/j.trac.2020.116045}
+}
+
+% --- Data leakage / reproducibility in ML ---
+
+@article{kaufman2012leakage,
+  title   = {Leakage in Data Mining: Formulation, Detection, and Avoidance},
+  author  = {Kaufman, Shachar and Rosset, Saharon and Perlich, Claudia and Stitelman, Ori},
+  journal = {ACM Transactions on Knowledge Discovery from Data (TKDD)},
+  volume  = {6},
+  number  = {4},
+  pages   = {1--21},
+  year    = {2012},
+  doi     = {10.1145/2382577.2382579}
+}
+
+@article{kapoor2023leakage,
+  title   = {Leakage and the Reproducibility Crisis in Machine-Learning-Based Science},
+  author  = {Kapoor, Sayash and Narayanan, Arvind},
+  journal = {Patterns},
+  volume  = {4},
+  number  = {9},
+  pages   = {100804},
+  year    = {2023},
+  doi     = {10.1016/j.patter.2023.100804}
+}
+
+% --- LLM reliability / hallucination ---
+
+@article{ji2023survey,
+  title   = {Survey of Hallucination in Natural Language Generation},
+  author  = {Ji, Ziwei and Lee, Nayeon and Frieske, Rita and Yu, Tiezheng and Su, Dan and Xu, Yan and Ishii, Etsuko and Bang, Ye Jin and Madotto, Andrea and Fung, Pascale},
+  journal = {ACM Computing Surveys},
+  volume  = {55},
+  number  = {12},
+  pages   = {1--38},
+  year    = {2023},
+  doi     = {10.1145/3571730}
+}
+
+% --- HITL / human-in-the-loop ML ---
+
+@article{monarch2021hitl,
+  title     = {Human-in-the-Loop Machine Learning},
+  author    = {Monarch, Robert},
+  publisher = {Manning Publications},
+  year      = {2021},
+  note      = {TODO: add ISBN / page count}
+}

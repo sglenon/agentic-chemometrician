@@ -1,0 +1,149 @@
+% sections/05_evaluation.tex
+
+\section{Evaluation Framework}
+\label{sec:evaluation}
+
+\subsection{Layer 1: Deterministic Harness}
+
+All quantitative results in this paper are produced by the Layer-1 evaluation
+harness (\texttt{src/chemometrics\_mcp/core/evaluation.py}).
+Layer 1 is defined by three properties:
+\begin{itemize}
+  \item \textbf{No LLM.} Tools are called directly as Python functions via
+    \texttt{from chemometrics\_mcp.tools import \ldots}; no MCP transport,
+    no language model, and no prompt is involved.
+  \item \textbf{Fixed seed.} All stochastic operations (random splits,
+    bootstrapping, shuffles) are seeded with \texttt{seed=42}.
+  \item \textbf{Byte-reproducible.} Given the same seed and the same input
+    files, every tool call returns bit-identical JSON output.
+    This is verified by running \texttt{run\_scenario\_full} twice and
+    asserting equality of the serialized output dicts.
+\end{itemize}
+
+Layer~2 evaluation---measuring system behavior with a live LLM issuing tool
+calls through the MCP transport---is explicitly deferred to future work.
+No Layer-2 result numbers appear in this paper.
+
+\subsection{Evaluation Scenarios}
+
+Table~\ref{tab:scenarios} describes the four evaluation scenarios.
+
+\begin{table}[ht]
+  \centering
+  \caption{Evaluation scenario matrix. $n$: total spectra after loading.
+    $p$: spectral features. Task: regression (Reg) or classification (Cls).
+    Groups: number of distinct group labels.}
+  \label{tab:scenarios}
+  \begin{tabular}{llllll}
+    \toprule
+    ID & Name & Modality & Task & $n$ & Groups \\
+    \midrule
+    S1 & Wear-layer regression   & NIR  & Reg  & TODO & TODO \\
+    S2 & Species multiclass      & NIR  & Cls  & TODO & TODO \\
+    S3 & Vinyl-vs-wood binary    & NIR  & Cls  & TODO & TODO \\
+    S4 & FTIR purity multiclass  & FTIR & Cls  & $\sim$20 & 7 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{S1 -- NIR wear-layer regression.}
+Predict vinyl flooring wear-layer thickness (mil) from NIR spectra
+collected in the range 1450--2450~nm.
+The workbook contains replicates keyed by sample filename stem.
+The task is \texttt{regression}; primary metric is RMSE and $R^2$.
+
+\paragraph{S2 -- NIR species multiclass.}
+Classify lumber species from the same NIR workbook.
+Multiple replicate scans exist per species instance.
+The task is \texttt{multi\_class\_classification}; primary metric is accuracy.
+
+\paragraph{S3 -- NIR vinyl-vs-wood binary.}
+Binary classification distinguishing vinyl from wood/lumber samples using
+the same NIR workbook.
+This is the simplest classification task (two well-separated classes
+in NIR space) and serves as a sanity check that the pipeline produces
+reasonable outputs.
+
+\paragraph{S4 -- FTIR purity multiclass.}
+Classify compound purity groups from FTIR transmittance spectra
+($\approx$20 spectra from 7 measurement groups, collected June 2026).
+This is the hardest scenario: small $n$, structured groups, and real
+instrument variation across groups.
+
+\subsection{Evaluation Metrics}
+
+The harness measures seven metric categories:
+
+\begin{enumerate}
+  \item \textbf{HITL compliance.}
+    Fraction of tool calls in which \texttt{approval\_required=True} was
+    correctly set when validation warnings were present, or when a fallback
+    model was recommended.
+    Measured against a hand-labeled oracle.
+
+  \item \textbf{Hallucination catch rate.}
+    Fraction of the 6 hallucination probes whose claim is absent from the
+    tool-produced interpretation output.
+    A probe \emph{passes} if the detection rule is satisfied (i.e., the
+    hallucination is not present in the output).
+
+  \item \textbf{Leakage TPR / FPR / precision.}
+    On the 6 leakage detection fixtures (3 positive, 3 clean in
+    \texttt{tests/fixtures/eval/leakage\_positive/} and
+    \texttt{tests/fixtures/eval/leakage\_clean/}):
+    true-positive rate (leakage warning raised on positive fixtures),
+    false-positive rate (leakage warning raised on clean fixtures),
+    and precision.
+
+  \item \textbf{Fallback correctness.}
+    Fraction of the fallback fixtures (\texttt{tests/fixtures/eval/fallback\_cases.json})
+    for which the recommended fallback model matches the oracle.
+
+  \item \textbf{Plan quality auto-score.}
+    Mean of 4 boolean checks (task name present, modality-relevant
+    preprocessing present, validation strategy present, model families
+    non-empty) applied to the \texttt{AnalysisPlan} produced by
+    \texttt{propose\_analysis\_plan}.
+    The auto-score is a floor, not a ceiling; \texttt{auto\_pass} requires
+    $\geq 3/4$ checks.
+
+  \item \textbf{Effort.}
+    Number of tool calls, HITL decision points, and wall-clock seconds per
+    scenario.
+
+  \item \textbf{Stability.}
+    Outputs of \texttt{run\_scenario\_full} must be byte-identical across two
+    runs at the same seed.
+\end{enumerate}
+
+\subsection{Baselines}
+
+Two baselines are included:
+
+\begin{itemize}
+  \item \textbf{Expert scripts.} Hand-written Python scripts
+    (\texttt{scripts/baseline\_expert\_s1\_s2\_s3\_s4.py}) that implement a
+    simple preprocessing-and-model pipeline for each scenario using the same
+    sklearn estimators, without the contract layer, HITL gates, or leakage
+    detection.
+  \item \textbf{Majority-class floor.} For classification scenarios, accuracy
+    of the majority-class classifier.
+    For regression (S1), a mean-predictor baseline (RMSE of predicting the
+    global mean for every sample).
+\end{itemize}
+
+\subsection{Ablation Configurations}
+
+Five configurations are tested to isolate the contribution of each component:
+
+\begin{itemize}
+  \item \textbf{Full}: complete system as described.
+  \item \textbf{no\_guardrails}: validation checks disabled; leakage warnings
+    suppressed.
+  \item \textbf{no\_validation}: \texttt{validate\_results} not called;
+    model selection proceeds without a \texttt{ValidationSummary}.
+  \item \textbf{no\_memory}: method-memory tools not called; plans are
+    generated from scratch every run.
+  \item \textbf{deterministic\_off}: random seed varied across two runs;
+    stability metric measures output divergence.
+\end{itemize}

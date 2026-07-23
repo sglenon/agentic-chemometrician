@@ -1,0 +1,38 @@
+% sections/00_abstract.tex
+
+\begin{abstract}
+Spectroscopic machine learning faces a distinctive set of failure modes:
+small sample sizes (often $n < 100$), replicate structure that silently leaks
+across cross-validation folds, and an absence of domain-expert oversight at
+the point where modeling decisions are made.
+Large language models are increasingly proposed as autonomous chemometrics
+analysts, but without structural reliability mechanisms they tend to hallucinate
+metrics, overstate causal conclusions from feature importance, and accept
+leakage-inflated results without raising warnings.
+
+We present the \emph{Agentic Chemometrician}, a Model Context Protocol (MCP)
+server that operationalizes reliability for spectroscopic ML through typed
+contracts, deterministic tool logic, and explicit human-in-the-loop (HITL)
+gates.
+The system exposes 8 core analytical tools and 3 persistent method-memory
+tools, governed by 18 domain contracts and 12 request/response wrappers
+(30 frozen dataclasses) over a shared SerializableContract base.
+A declarative modality registry (currently FTIR, NIR, and Raman) centralizes
+axis-unit enforcement, value-domain clipping, and preprocessing scope, enabling
+modality-general behavior without scattered conditional branches.
+HITL approval gates are placed at plan proposal, fallback model selection,
+and final model selection whenever validation warnings are present.
+
+We evaluate the system on four spectroscopic scenarios (S1: NIR wear-layer
+regression; S2: NIR species multiclass; S3: NIR vinyl-vs-wood binary;
+S4: FTIR purity multiclass) using a deterministic Layer-1 harness
+(seed = 42, no live LLM, byte-reproducible outputs) that measures leakage
+detection, hallucination guards, fallback correctness, plan quality,
+and HITL compliance.
+Headline results:
+leakage detection true-positive rate \TODO{TPR from harness run},
+false-positive rate \TODO{FPR from harness run};
+naive KFold vs.\ grouped CV accuracy gap \TODO{mean gap across scenarios}.
+All result numbers for Layer-2 (live-LLM-in-loop) evaluation are reserved
+for future work.
+\end{abstract}

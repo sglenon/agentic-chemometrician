@@ -1,0 +1,121 @@
+% sections/04_reliability.tex
+
+\section{Reliability Mechanisms}
+\label{sec:reliability}
+
+\subsection{Leakage Detection}
+\label{sec:leakage}
+
+Leakage detection is the headline technical contribution of this work.
+The \texttt{validate\_results} tool runs two leakage checks automatically on
+every analysis run.
+
+\paragraph{Replicate leakage detection.}
+The \texttt{check\_replicate\_leakage} function operationalizes the following
+insight: if a classifier memorizes replicate structure rather than learning
+generalizable patterns, its predictions will be highly consistent
+\emph{within} replicate groups even before any group-aware CV correction.
+For each candidate group column detected during dataset inspection, the
+function groups sample indices by group value, enumerates pairs of predictions
+within each group, and computes the fraction of pairs whose predictions are
+identical.
+If this \emph{intra-group consistency rate} exceeds 80\% for any group, a
+\texttt{replicate\_leakage} warning is raised.
+The threshold (80\%) and the random sampling strategy for large groups
+(at most 190 sampled pairs, seed 42) are fixed constants in the core layer.
+
+\paragraph{Group leakage risk detection.}
+\texttt{check\_group\_leakage} raises a \texttt{group\_leakage\_risk} warning
+when a dataset has candidate group columns but the analysis was run without a
+grouped validation strategy.
+The check fires by comparing \texttt{result.validation\_strategy} against a
+fixed set of recognized grouped strategies:
+\texttt{\{grouped\_kfold\_5, grouped\_kfold\_3, group\_kfold, leave\_one\_group\_out, logo\}}.
+Any strategy absent from this set, including \texttt{None}, triggers the
+warning for each affected model result.
+
+\paragraph{The KFold-mislabeled-as-grouped bug.}
+During development, an intermediate implementation used the string
+\texttt{"grouped\_kfold"} as the \texttt{validation\_strategy} field but passed
+the group labels to a standard \texttt{KFold} splitter rather than
+\texttt{GroupKFold}.
+This bug was silent: no error was raised, the metric appeared plausible, and
+the strategy name looked correct.
+The fix introduced real \texttt{GroupKFold} and \texttt{LeaveOneGroupOut}
+splitters in the modeling core, keyed on group labels derived from sample
+filename stems or metadata columns.
+The recognized grouped strategies set in \texttt{check\_group\_leakage} now
+exclusively accepts the correct implementation names, so the old mislabeled
+strategy string would trigger a warning rather than passing silently.
+
+\paragraph{Suspicious metric detection.}
+\texttt{check\_suspicious\_metrics} warns when a classification model achieves
+accuracy or balanced accuracy $\geq 0.99$.
+This heuristic does not diagnose leakage but flags results that warrant
+manual inspection; the warning code is \texttt{suspicious\_high\_metric}.
+An analogous check, \texttt{check\_regression\_target\_leakage}, fires when
+a regression model achieves $R^2 > 0.99$.
+
+\subsection{Hallucination Guards}
+\label{sec:hallucination}
+
+The hallucination guard architecture relies on structural separation: no
+metric value appears in a \texttt{ToolResponse} payload unless it was
+returned by a sklearn cross-validation function in the deterministic core.
+Three probe types are tested in the evaluation harness
+(\texttt{tests/fixtures/eval/hallucination\_probes.json}):
+
+\begin{itemize}
+  \item \textbf{metric\_fabricated}: a claim of a specific numeric performance
+    value on a held-out test set.
+    Detection rule: only cross-validation predictions are produced in the
+    standard pipeline; any reported held-out test-set metric is fabricated
+    if no explicit train/test split was requested.
+
+  \item \textbf{causal\_claim}: a claim that a wavelength or feature
+    \emph{causes} an observed measurement difference.
+    Detection rule: feature importance $\neq$ causal mechanism; causal claims
+    require domain chemistry confirmation and controlled experiments, neither
+    of which is performed by the tool.
+
+  \item \textbf{zero\_importance\_critical}: a claim that a spectral band
+    or feature makes zero contribution to model performance.
+    Detection rule: any feature with a non-zero model coefficient or
+    non-zero \texttt{feature\_importances\_} value cannot be claimed to have
+    zero importance.
+\end{itemize}
+
+Six hallucination probes are included in the evaluation fixture
+(two of each type).
+The current harness detects probe violations by string-matching the
+\texttt{interpretation} field of \texttt{AnalysisResult} objects against the
+\texttt{detection\_rule} criteria.
+All six probes target the Layer-1 pipeline; detection of hallucination in
+live LLM output (Layer 2) is future work.
+
+\subsection{Fallback Logic}
+\label{sec:fallback}
+
+When a model fails, \texttt{recommend\_next\_model} classifies the failure
+and recommends a fallback.
+Failure classification uses priority-ordered keyword matching against the
+failure reason string:
+\texttt{data} (missing/NaN/shape errors),
+\texttt{preprocessing} (SNV/MSC/normalization failures),
+\texttt{convergence} (iteration/divergence errors),
+\texttt{sample\_size} (insufficient samples),
+\texttt{dependency} (missing package),
+\texttt{unsupported\_task},
+and \texttt{unknown}.
+
+The fallback recommendation uses two lookup tables:
+\texttt{\_MODEL\_SPECIFIC\_FALLBACKS} (e.g., \texttt{pca\_lda} $\to$
+\texttt{svm\_rbf}, \texttt{plsr} $\to$ \texttt{svr})
+and \texttt{\_CLASSIFICATION\_FALLBACKS} (e.g., convergence failures
+$\to$ \texttt{random\_forest}).
+Data failures and dependency failures have no automatic fallback:
+\texttt{None} is returned, and an additional \texttt{no\_automatic\_fallback}
+warning is raised.
+Regardless of the recommendation, \texttt{requires\_human\_approval} is
+always set to \texttt{True} on the returned
+\texttt{NextModelRecommendation}---this is a non-negotiable hard-coded gate.

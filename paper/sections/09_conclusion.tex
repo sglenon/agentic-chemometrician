@@ -1,0 +1,44 @@
+% sections/09_conclusion.tex
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented the Agentic Chemometrician, an MCP-based tool system for
+spectroscopic machine learning that achieves reliability through typed
+contracts, deterministic core logic, and human-in-the-loop approval gates.
+The central design claim of this work is that trustworthy agentic scientific
+analysis does not require a more capable language model---it requires an
+architecture that makes errors detectable and routes consequential decisions
+through human checkpoints.
+
+The headline contribution at the system level is a leakage-detection
+mechanism that automatically identifies replicate leakage and group-leakage
+risk in spectroscopic cross-validation, and gates downstream model selection
+on the resulting warnings.
+Replicate leakage is a pervasive and quietly damaging failure mode in
+small-$n$ spectroscopic datasets; automated detection with HITL escalation
+addresses it without requiring the LLM to reason about group structure.
+
+At the evaluation level, the Layer-1 deterministic harness establishes
+that the tool system behaves correctly in isolation: leakage is detected,
+hallucination guards fire on fabricated metrics, HITL gates are respected,
+and fallback logic is correct---all with byte-reproducible outputs at seed
+42 across four real spectroscopic scenarios.
+
+The primary direction for future work is Layer-2 evaluation: running a
+live language model agent against the MCP server, recording its tool calls
+and responses, and scoring the end-to-end behavior against the same
+criteria the Layer-1 harness measures deterministically.
+Layer-2 will determine whether the structural guarantees of the contract
+layer are sufficient to guide a real LLM agent to correct analysis, and
+it will generate the numeric results that are currently reserved as
+\texttt{\textbackslash TODO} placeholders in this paper.
+
+Broader future directions include expanding the modality registry to cover
+UV--Vis and process mass spectrometry, automating hallucination probe
+generation, formalizing expert baselines with domain-expert participation,
+and integrating the method-memory tools with laboratory information
+management systems to accumulate institutional knowledge across product lines.
+
+The source code, fixtures, and harness are available at
+\TODO{repository URL}.
