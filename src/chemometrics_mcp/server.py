@@ -6,15 +6,18 @@ Run with:
 Or via the MCP stdio transport (for use with Claude Desktop, Codex, etc.):
     python -m chemometrics_mcp.server --transport stdio
 
-The server registers all eight chemometrics tools. All tools are fully
-implemented with real logic — none return deferred or stub responses.
+The server registers the compatibility tools and the folder-first v2 project
+workflow. Registered tools execute real bounded logic rather than arbitrary
+Python or shell commands.
 
-Security: no tool exposes arbitrary Python or shell execution. Artifact writes
-are bounded to the configured runs directory via ``chemometrics_mcp.artifacts``.
+Security: no tool exposes arbitrary Python or shell execution. V2 artifact
+writes are contained by a project store and can be restricted further with
+``CHEMOMETRICS_ALLOWED_ROOTS``.
 """
 from __future__ import annotations
 
 import json
+import importlib.metadata
 from pathlib import Path
 from typing import Any
 
@@ -63,10 +66,18 @@ from chemometrics_mcp.tools import (
     select_best_model,
     validate_results,
 )
+from chemometrics_mcp import mcp_v2
 
 _RUNS_ROOT = Path("runs")
 
 server = Server("chemometrics-mcp")
+
+
+def _server_version() -> str:
+    try:
+        return importlib.metadata.version("agentic-chemometrician")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.2.0"
 
 
 def _tool_result(response: ToolResponse[Any]) -> list[types.TextContent]:
@@ -75,7 +86,7 @@ def _tool_result(response: ToolResponse[Any]) -> list[types.TextContent]:
 
 @server.list_tools()
 async def list_tools() -> list[types.Tool]:
-    return [
+    legacy_tools = [
         types.Tool(
             name="inspect_dataset",
             description=(
@@ -356,10 +367,16 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
     ]
+    return legacy_tools + [
+        types.Tool(name=item["name"], description=item["description"], inputSchema=item["inputSchema"])
+        for item in mcp_v2.tool_definitions()
+    ]
 
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextContent]:
+    if mcp_v2.is_v2_tool(name):
+        return [types.TextContent(type="text", text=json.dumps(mcp_v2.dispatch(name, arguments), default=str))]
     if name == "inspect_dataset":
         request = InspectDatasetRequest(
             source_uri=arguments["source_uri"],
@@ -747,7 +764,7 @@ async def main() -> None:
             write_stream,
             InitializationOptions(
                 server_name="chemometrics-mcp",
-                server_version="0.1.0",
+                server_version=_server_version(),
                 capabilities=server.get_capabilities(
                     notification_options=NotificationOptions(),
                     experimental_capabilities={},

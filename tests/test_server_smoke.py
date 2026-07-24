@@ -28,7 +28,7 @@ from chemometrics_mcp.tools import inspect_dataset
 
 
 class ServerToolRegistrationTests(unittest.TestCase):
-    def test_list_tools_returns_all_eight(self) -> None:
+    def test_list_tools_returns_legacy_and_v2_tools(self) -> None:
         tools = asyncio.run(mcp_server.list_tools())
         names = {t.name for t in tools}
         expected = {
@@ -43,6 +43,15 @@ class ServerToolRegistrationTests(unittest.TestCase):
             "save_method_memory",
             "search_method_memory",
             "recommend_from_memory",
+            "create_project",
+            "get_project",
+            "update_project_manifest",
+            "plan_project_analysis",
+            "approve_project_plan",
+            "run_project_analysis",
+            "get_project_run",
+            "generate_project_report",
+            "list_chemometrics_capabilities",
         }
         self.assertEqual(names, expected)
 
