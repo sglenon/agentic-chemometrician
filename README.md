@@ -323,7 +323,7 @@ allowlist are then rejected.
 
 ## MCP tools
 
-The folder-first v2 tools are the recommended product surface:
+The MCP exposes one scientist-facing project workflow:
 
 | Tool | Purpose |
 | --- | --- |
@@ -336,19 +336,6 @@ The folder-first v2 tools are the recommended product surface:
 | `get_project_run` | Return compact terminal status and issues |
 | `generate_project_report` | Validate evidence and return the report, offline dashboard, figures, tables, and optional notebook |
 | `list_chemometrics_capabilities` | Describe supported task packs, inputs, metrics, and claim ceilings |
-
-The original single-dataset tools remain available as a compatibility surface:
-
-| Tool | Purpose |
-| --- | --- |
-| `inspect_dataset` | Load spectral data, detect metadata, candidate labels, modality, and data quality warnings |
-| `propose_analysis_plan` | Convert a dataset summary into a bounded, human-readable analysis plan for approval |
-| `run_analysis` | Execute approved preprocessing and modeling tasks; save structured run artifacts |
-| `validate_results` | Check for replicate leakage, group leakage, class imbalance, split instability, and suspicious metrics |
-| `select_best_model` | Recommend the most defensible model by balancing performance, validation reliability, interpretability, and task suitability |
-| `recommend_next_model` | Classify a model failure and return a fallback recommendation with rationale |
-| `interpret_results` | Summarize feature and wavelength importance across models; flag unstable or overclaimed interpretations |
-| `generate_report` | Produce a human-reviewable report with metrics, figures, validation warnings, caveats, and next-step recommendations |
 
 ## Scientific scope
 

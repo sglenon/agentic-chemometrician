@@ -1,7 +1,7 @@
-"""Smoke tests for the MCP server and inspect_dataset tool.
+"""Smoke tests for the MCP server and retained core utilities.
 
 These tests verify:
-  - All 8 tools are registered and discoverable.
+  - The current project tools are registered and discoverable.
   - Invalid inputs to inspect_dataset return explicit error responses, not exceptions.
   - inspect_dataset on the real NIR Excel file returns a valid DatasetInspection payload.
   - Artifact path safety: run IDs with path separators are rejected.
@@ -28,21 +28,10 @@ from chemometrics_mcp.tools import inspect_dataset
 
 
 class ServerToolRegistrationTests(unittest.TestCase):
-    def test_list_tools_returns_legacy_and_v2_tools(self) -> None:
+    def test_list_tools_returns_current_project_tools(self) -> None:
         tools = asyncio.run(mcp_server.list_tools())
         names = {t.name for t in tools}
         expected = {
-            "inspect_dataset",
-            "propose_analysis_plan",
-            "run_analysis",
-            "validate_results",
-            "select_best_model",
-            "recommend_next_model",
-            "interpret_results",
-            "generate_report",
-            "save_method_memory",
-            "search_method_memory",
-            "recommend_from_memory",
             "create_project",
             "get_project",
             "update_project_manifest",

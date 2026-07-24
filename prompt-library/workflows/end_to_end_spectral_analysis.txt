@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Drive the v2 chemometrics MCP from a folder of local measurements to a
+Drive the chemometrics MCP from a folder of local measurements to a
 scientist-reviewed evidence report. Automate the protocol, not the scientist's
 final judgment.
 

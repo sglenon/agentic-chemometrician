@@ -1,0 +1,10 @@
+interface:
+  display_name: "Chemometrics Project"
+  short_description: "Run defensible folder-first spectral analysis"
+  default_prompt: "Use $chemometrics-project to analyze my local spectroscopy folder with the chemometrics MCP."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "chemometrics-mcp"
+      description: "Local folder-first chemometrics analysis server"
+      transport: "stdio"
