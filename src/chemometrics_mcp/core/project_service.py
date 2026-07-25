@@ -12,6 +12,7 @@ import numpy as np
 from chemometrics_contracts.project import ProjectManifest, ValidationIssue, WarningLevel
 from chemometrics_mcp.core.ingestion import IngestionIssue, ParserRegistry, ParsedMeasurement
 from chemometrics_mcp.core.manifests import apply_manifest_updates, build_draft_manifest
+from chemometrics_mcp.core.manifest_hints import load_hints_file
 from chemometrics_mcp.core.project_store import ProjectStore, create_project_layout, fingerprint_source
 from chemometrics_mcp.core.units import validate_axis, validate_signal
 
@@ -24,7 +25,8 @@ class ProjectService:
 
     @classmethod
     def create(cls, source_root: str | Path, output_root: str | Path | None = None,
-               project_id: str | None = None) -> "ProjectService":
+               project_id: str | None = None,
+               infer_roles_from_filenames: bool = False) -> "ProjectService":
         store = create_project_layout(source_root, output_root, project_id)
         service = cls(store)
         root = Path(source_root).resolve()
@@ -64,7 +66,13 @@ class ProjectService:
                 measurements, issues = registry.parse(entry.source_path)
                 parsed.extend(measurements)
                 all_issues.extend(issues)
-        manifest = build_draft_manifest(metadata["project_id"], str(root), inventory, parsed)
+        # Tier 1: auto-load declared hints file if present in source_root.
+        hints = load_hints_file(root)
+        manifest = build_draft_manifest(
+            metadata["project_id"], str(root), inventory, parsed,
+            hints=hints,
+            infer_roles_from_filenames=infer_roles_from_filenames,
+        )
         converted_issues = tuple(_validation_issue(issue, root) for issue in all_issues)
         if converted_issues:
             manifest = manifest.model_copy(update={

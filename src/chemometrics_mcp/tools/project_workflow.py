@@ -52,9 +52,11 @@ def _issues(value: Any) -> list[dict[str, Any]]:
     return _compact(_json(value)) if value else []
 
 
-def create_project(source_root: str, output_root: str | None = None, project_id: str | None = None) -> dict[str, Any]:
+def create_project(source_root: str, output_root: str | None = None, project_id: str | None = None,
+                   infer_roles_from_filenames: bool = False) -> dict[str, Any]:
     service_type = _load_service()
-    created = service_type.create(source_root, output_root=output_root, project_id=project_id)
+    created = service_type.create(source_root, output_root=output_root, project_id=project_id,
+                                  infer_roles_from_filenames=infer_roles_from_filenames)
     # ProjectService.create returns the opened service; support a direct
     # manifest return too for small compatible implementations.
     service = created if hasattr(created, "get_manifest") else None

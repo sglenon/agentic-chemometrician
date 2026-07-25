@@ -10,6 +10,7 @@ from chemometrics_contracts.project import (
     SampleRecord, SignalKind, SourceAsset, ValidationIssue, WarningLevel,
 )
 from chemometrics_mcp.core.project_store import data_hash
+from chemometrics_mcp.core.manifest_hints import ManifestHints
 
 
 def _get(value: Mapping[str, Any] | object | None, name: str, default: Any = None) -> Any:
@@ -50,11 +51,30 @@ def build_draft_manifest(
     source_root: str,
     inventory: Sequence[Mapping[str, Any] | object],
     parsed_measurements: Sequence[Mapping[str, Any] | object] = (),
+    *,
+    hints: ManifestHints | None = None,
+    infer_roles_from_filenames: bool = False,
 ) -> ProjectManifest:
     """Build a draft without guessing scientific roles or group hierarchy.
 
     Parsed measurements are associated by relative path when available, then by
     input order.  Filename stems only supply clearly provisional sample ids.
+
+    When *hints* is provided (a :class:`~chemometrics_mcp.core.manifest_hints.ManifestHints`
+    loaded from a ``manifest_hints.json`` in the source root), its entries are applied
+    directly to matching samples and measurements before the manifest hash is computed.
+    Declared hints (``provenance="declared"``) are treated as authoritative user-supplied
+    truth and applied silently.
+
+    When *infer_roles_from_filenames* is ``True``, an additional filename-convention
+    heuristic pass is run for any stem not already covered by *hints*.  Each inferred
+    role/composition is tagged ``roles_inferred_from_filename=True`` in the sample
+    metadata alongside a human-readable ``hints_note`` so the scientist knows to
+    confirm.  This tier is opt-in and never applied automatically.
+
+    When both parameters are at their defaults (``hints=None``,
+    ``infer_roles_from_filenames=False``) the output is byte-identical to the
+    pre-hints behaviour.
     """
     root = Path(source_root).resolve()
     parsed_by_path: dict[str, list[Mapping[str, Any] | object]] = {}
@@ -208,6 +228,91 @@ def build_draft_manifest(
                             field,
                         )
                     )
+
+    # --------------------------------------------------------------------------
+    # Hints application — runs BEFORE the manifest hash is computed so the hash
+    # reflects the actual (possibly hint-informed) state of the draft.
+    # Default path (hints=None, infer_roles_from_filenames=False): no-op.
+    # --------------------------------------------------------------------------
+    if hints is not None or infer_roles_from_filenames:
+        # Build a combined hints lookup: declared hints take priority; filename
+        # heuristic fills in only stems not already covered by declared hints.
+        effective_hints: ManifestHints | None = hints
+        if infer_roles_from_filenames:
+            from chemometrics_mcp.core.manifest_hints import infer_hints_from_filenames
+            all_stems = [Path(s.metadata.get("filename_stem", s.sample_id)).stem for s in samples]
+            inferred = infer_hints_from_filenames(all_stems)
+            if hints is None:
+                effective_hints = inferred
+            else:
+                # Merge: declared wins on any key that exists in both.
+                merged_entries = {**inferred.entries, **hints.entries}
+                from chemometrics_mcp.core.manifest_hints import ManifestHints as _MH
+                effective_hints = _MH(entries=merged_entries, source=hints.source)
+
+        if effective_hints is not None:
+            updated_samples: list[SampleRecord] = []
+            for sample in samples:
+                stem = sample.metadata.get("filename_stem", "")
+                hint = effective_hints.lookup(str(stem))
+                if hint is None:
+                    updated_samples.append(sample)
+                    continue
+                patch: dict[str, Any] = {}
+                if hint.role is not None:
+                    patch["role"] = _enum_or(hint.role, MeasurementRole, MeasurementRole.UNKNOWN)
+                if hint.composition is not None:
+                    patch["composition"] = hint.composition
+                # Build merged metadata first so reference_name and advisory markers
+                # end up in the same dict that goes into model_validate.
+                meta_patch: dict[str, Any] = dict(sample.metadata)
+                if hint.reference_name is not None:
+                    meta_patch["reference_name"] = hint.reference_name
+                if hint.provenance == "inferred":
+                    meta_patch["roles_inferred_from_filename"] = True
+                    if hint.note:
+                        meta_patch["hints_note"] = hint.note
+                elif hint.note:
+                    meta_patch["hints_note"] = hint.note
+                updated_samples.append(
+                    sample.__class__.model_validate({
+                        **sample.model_dump(mode="json"),
+                        **patch,
+                        "metadata": meta_patch,
+                    })
+                )
+            samples = updated_samples
+
+            # Apply measurement role from hint (measurement role mirrors sample role
+            # for declared hints; advisory tag is on the sample record).
+            sample_role_by_id = {s.sample_id: s.role for s in samples}
+            updated_measurements: list[MeasurementRecord] = []
+            for measurement in measurements:
+                stem = ""
+                # Derive stem from the asset's relative path via the asset lookup built above.
+                for asset in assets:
+                    if asset.asset_id == measurement.asset_id:
+                        stem = Path(asset.relative_path).stem
+                        break
+                hint = effective_hints.lookup(stem)
+                if hint is None or hint.role is None:
+                    updated_measurements.append(measurement)
+                    continue
+                new_role = _enum_or(hint.role, MeasurementRole, MeasurementRole.UNKNOWN)
+                meta_patch = dict(measurement.metadata)
+                if hint.provenance == "inferred":
+                    meta_patch["roles_inferred_from_filename"] = True
+                    if hint.note:
+                        meta_patch["hints_note"] = hint.note
+                updated_measurements.append(
+                    measurement.__class__.model_validate({
+                        **measurement.model_dump(mode="json"),
+                        "role": new_role.value,
+                        "metadata": meta_patch,
+                    })
+                )
+            measurements = updated_measurements
+
     manifest = ProjectManifest(project_id=project_id, source_root=source_root, assets=tuple(assets), samples=tuple(samples),
                                measurements=tuple(measurements), unresolved_issues=tuple(issues))
     return manifest.model_copy(update={"manifest_hash": _manifest_hash(manifest)})

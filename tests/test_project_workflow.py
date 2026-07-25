@@ -5,7 +5,7 @@ from chemometrics_mcp.tools import project_workflow as workflow
 
 class FakeService:
     def __init__(self, output_root): self.output_root = output_root; self.manifest = None
-    def create(self, source_root, output_root=None, project_id=None):
+    def create(self, source_root, output_root=None, project_id=None, infer_roles_from_filenames=False):
         self.manifest = SimpleNamespace(project_id=project_id or "demo", manifest_hash="h", assets=(1,), samples=(1,), measurements=(1,), unresolved_issues=())
         return self
     def get_manifest(self): return self.manifest
