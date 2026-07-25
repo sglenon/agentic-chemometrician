@@ -6,6 +6,7 @@ from typing import Any, Mapping
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from chemometrics_mcp.tools import project_workflow
+from chemometrics_mcp.tools import preprocess_spectra as _preprocess_spectra_module
 
 
 class _Request(BaseModel):
@@ -67,6 +68,19 @@ class GenerateProjectReportRequest(_Request):
     include_notebook: bool = False
 
 
+class PreprocessSpectraRequest(_Request):
+    model_config = ConfigDict(extra="forbid", strict=False)  # steps list contains dicts with mixed types
+    source_path: str = Field(min_length=1)
+    steps: list[dict[str, Any]] = Field(
+        min_length=1,
+        description=(
+            "Ordered list of preprocessing steps.  Each item must have a 'name' key "
+            "(e.g. 'snv', 'sg_2nd_deriv', 'region_select') plus optional per-step "
+            "parameters.  For 'region_select' use 'min' and 'max' for axis-unit bounds."
+        ),
+    )
+
+
 _TOOLS: dict[str, tuple[str, type[_Request], Any]] = {
     "create_project": ("Create a folder-first project and a conservative draft manifest.", CreateProjectRequest, project_workflow.create_project),
     "get_project": ("Get a compact project summary without raw measurement arrays.", GetProjectRequest, project_workflow.get_project),
@@ -77,6 +91,14 @@ _TOOLS: dict[str, tuple[str, type[_Request], Any]] = {
     "get_project_run": ("Get compact persisted project run status without measurement arrays.", GetProjectRunRequest, project_workflow.get_project_run),
     "generate_project_report": ("Validate one run and return its scientist report, offline dashboard, figures, tables, and optional reproducibility notebook.", GenerateProjectReportRequest, project_workflow.generate_project_report),
     "list_chemometrics_capabilities": ("List available conservative chemometrics task capabilities.", ListCapabilitiesRequest, project_workflow.list_capabilities),
+    "preprocess_spectra": (
+        "Load spectra from a file or directory and apply an ordered list of preprocessing steps "
+        "(SNV, MSC, Savitzky-Golay derivatives, baseline correction, area normalization, region select). "
+        "Returns before/after spectral arrays and axis for overlay plots.  "
+        "Operates outside the project pipeline — no project setup required.",
+        PreprocessSpectraRequest,
+        _preprocess_spectra_module.preprocess_spectra,
+    ),
 }
 
 

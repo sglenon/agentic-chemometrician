@@ -41,6 +41,7 @@ class ServerToolRegistrationTests(unittest.TestCase):
             "get_project_run",
             "generate_project_report",
             "list_chemometrics_capabilities",
+            "preprocess_spectra",
         }
         self.assertEqual(names, expected)
 

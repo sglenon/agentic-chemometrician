@@ -10,9 +10,9 @@ from scipy.sparse import diags, eye as speye
 from scipy.sparse.linalg import spsolve
 
 
-def _adaptive_sg_window(n_features: int) -> int:
+def _adaptive_sg_window(n_features: int, polyorder: int = 2) -> int:
     window = min(11, n_features - 1)
-    window = max(5, window)
+    window = max(polyorder + 2, window)  # must exceed polyorder and be odd
     if window % 2 == 0:
         window -= 1
     return window
@@ -32,7 +32,7 @@ def _als_baseline(y: np.ndarray, lam: float = 1e5, p: float = 0.01, max_iter: in
     return z
 
 
-def apply(X: np.ndarray, method: str, *, axis: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
+def apply(X: np.ndarray, method: str, *, axis: np.ndarray | None = None, **params: object) -> tuple[np.ndarray, dict]:
     """Apply a named preprocessing method to X (n_samples × n_features).
 
     Parameters
@@ -41,13 +41,21 @@ def apply(X: np.ndarray, method: str, *, axis: np.ndarray | None = None) -> tupl
         2D array of shape (n_samples, n_features).
     method:
         One of ``"raw"``, ``"snv"``, ``"msc"``, ``"sg_1st_deriv"``, ``"sg_2nd_deriv"``,
-        ``"baseline_correction"``, ``"area_normalization"``.
+        ``"sg_3rd_deriv"``, ``"baseline_correction"``, ``"area_normalization"``,
+        ``"region_select"``.
     axis:
         Optional 1D array of axis values (e.g. wavenumbers) for spacing-aware methods.
+        Required for ``"region_select"``.
+    **params:
+        Extra per-method parameters.  ``"region_select"`` accepts ``min`` and ``max``
+        (axis-unit bounds, both optional — omitting either removes no points on that side).
 
     Returns
     -------
     tuple of (X_processed, details_dict).
+    For ``"region_select"`` the details_dict also includes ``axis_out`` (the trimmed
+    axis array as a numpy array) so callers can track axis changes through a
+    multi-step pipeline.
 
     Raises
     ------
@@ -97,7 +105,7 @@ def apply(X: np.ndarray, method: str, *, axis: np.ndarray | None = None) -> tupl
         return X_out, details
 
     if method == "sg_1st_deriv":
-        window_length = _adaptive_sg_window(p)
+        window_length = _adaptive_sg_window(p, polyorder=2)
         polyorder = 2
         deriv = 1
         X_out = savgol_filter(X, window_length=window_length, polyorder=polyorder, deriv=deriv, axis=1)
@@ -112,7 +120,7 @@ def apply(X: np.ndarray, method: str, *, axis: np.ndarray | None = None) -> tupl
         return X_out, details
 
     if method == "sg_2nd_deriv":
-        window_length = _adaptive_sg_window(p)
+        window_length = _adaptive_sg_window(p, polyorder=2)
         polyorder = 2
         deriv = 2
         X_out = savgol_filter(X, window_length=window_length, polyorder=polyorder, deriv=deriv, axis=1)
@@ -123,6 +131,55 @@ def apply(X: np.ndarray, method: str, *, axis: np.ndarray | None = None) -> tupl
             "window_length": window_length,
             "polyorder": polyorder,
             "deriv": deriv,
+        }
+        return X_out, details
+
+    if method == "sg_3rd_deriv":
+        polyorder = 3
+        window_length = _adaptive_sg_window(p, polyorder=polyorder)
+        deriv = 3
+        X_out = savgol_filter(X, window_length=window_length, polyorder=polyorder, deriv=deriv, axis=1)
+        details = {
+            "method": method,
+            "shape_in": [n, p],
+            "shape_out": list(X_out.shape),
+            "window_length": window_length,
+            "polyorder": polyorder,
+            "deriv": deriv,
+        }
+        return X_out, details
+
+    if method == "region_select":
+        if axis is None:
+            raise ValueError("region_select requires axis to be provided")
+        ax = np.asarray(axis, dtype=float)
+        if ax.ndim != 1 or len(ax) != p:
+            raise ValueError("axis must be 1D and match number of spectral features")
+        min_val = float(params["min"]) if "min" in params else None
+        max_val = float(params["max"]) if "max" in params else None
+        mask = np.ones(p, dtype=bool)
+        if min_val is not None:
+            mask &= ax >= min_val
+        if max_val is not None:
+            mask &= ax <= max_val
+        n_kept = int(mask.sum())
+        if n_kept == 0:
+            raise ValueError(
+                f"region_select: no spectral points remain after applying "
+                f"min={min_val!r}, max={max_val!r} to axis range "
+                f"[{ax.min():.4g}, {ax.max():.4g}]"
+            )
+        X_out = X[:, mask]
+        ax_out = ax[mask]
+        details = {
+            "method": method,
+            "shape_in": [n, p],
+            "shape_out": list(X_out.shape),
+            "min": min_val,
+            "max": max_val,
+            "n_kept": n_kept,
+            "n_total": p,
+            "axis_out": ax_out,
         }
         return X_out, details
 

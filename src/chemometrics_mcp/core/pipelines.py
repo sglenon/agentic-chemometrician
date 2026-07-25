@@ -69,7 +69,7 @@ class SNVTransformer(_SpectralTransformer):
 
 
 class SavgolDerivativeTransformer(_SpectralTransformer):
-    """Sample-local Savitzky--Golay first or second derivative."""
+    """Sample-local Savitzky--Golay first, second, or third derivative."""
 
     def __init__(self, order: int = 1, window_length: int | None = None,
                  polyorder: int = 2, delta: float = 1.0):
@@ -80,8 +80,8 @@ class SavgolDerivativeTransformer(_SpectralTransformer):
 
     def fit(self, X: Any, y: Any = None):
         super().fit(X, y)
-        if self.order not in (1, 2):
-            raise ValueError("order must be 1 or 2")
+        if self.order not in (1, 2, 3):
+            raise ValueError("order must be 1, 2, or 3")
         if self.polyorder < self.order:
             raise ValueError("polyorder must be at least derivative order")
         if not np.isfinite(self.delta) or self.delta <= 0:
@@ -172,6 +172,66 @@ class BaselineCorrector(_SpectralTransformer):
         return np.vstack([row - _als_baseline(row, self.lam, self.p, self.max_iter) for row in matrix])
 
 
+class RegionSelector(_SpectralTransformer):
+    """Truncate spectra to a contiguous axis region defined by unit-space bounds.
+
+    Parameters
+    ----------
+    axis:
+        1D array of axis values (wavenumbers, wavelengths, …) that correspond to
+        the spectral features.  Must match the number of features seen at fit time.
+    min_val:
+        Lower bound in axis units (inclusive).  ``None`` keeps all points on the
+        low side.
+    max_val:
+        Upper bound in axis units (inclusive).  ``None`` keeps all points on the
+        high side.
+    """
+
+    def __init__(self, axis: Any, min_val: float | None = None, max_val: float | None = None):
+        self.axis = axis
+        self.min_val = min_val
+        self.max_val = max_val
+
+    def fit(self, X: Any, y: Any = None):
+        super().fit(X, y)
+        ax = np.asarray(self.axis, dtype=float)
+        if ax.ndim != 1 or not np.isfinite(ax).all():
+            raise ValueError("axis must be a finite 1D array")
+        if len(ax) != self.n_features_in_:
+            raise ValueError(
+                f"axis length ({len(ax)}) must match number of spectral features ({self.n_features_in_})"
+            )
+        mask = np.ones(len(ax), dtype=bool)
+        if self.min_val is not None:
+            mask &= ax >= self.min_val
+        if self.max_val is not None:
+            mask &= ax <= self.max_val
+        if not mask.any():
+            raise ValueError(
+                f"RegionSelector: no spectral points remain after applying "
+                f"min={self.min_val!r}, max={self.max_val!r} to axis range "
+                f"[{ax.min():.4g}, {ax.max():.4g}]"
+            )
+        self.mask_ = mask
+        self.axis_ = ax[mask].copy()
+        self.n_features_out_ = int(mask.sum())
+        return self
+
+    def transform(self, X: Any) -> np.ndarray:
+        matrix = self._matrix_for_transform(X)
+        return matrix[:, self.mask_]
+
+    def get_provenance(self) -> dict[str, Any]:
+        result = super().get_provenance()
+        result["fitted_state"].update({
+            "n_features_out": getattr(self, "n_features_out_", None),
+            "min_val": self.min_val,
+            "max_val": self.max_val,
+        })
+        return result
+
+
 class MSCTransformer(_SpectralTransformer):
     """Multiplicative scatter correction using a training-fold reference."""
     transform_scope = "training_fold"
@@ -203,11 +263,13 @@ class MSCTransformer(_SpectralTransformer):
 
 def make_preprocessor(name: str, **params: Any) -> _SpectralTransformer:
     """Build one supported preprocessing transformer by its stable short name."""
-    factories = {
+    factories: dict[str, Any] = {
         "raw": IdentityTransformer,
         "snv": SNVTransformer,
         "sg_1st_deriv": lambda **kwargs: SavgolDerivativeTransformer(order=1, **kwargs),
         "sg_2nd_deriv": lambda **kwargs: SavgolDerivativeTransformer(order=2, **kwargs),
+        "sg_3rd_deriv": lambda **kwargs: SavgolDerivativeTransformer(order=3, polyorder=max(kwargs.pop("polyorder", 3), 3), **kwargs),
+        "region_select": RegionSelector,
         "area_normalization": AreaNormalizer,
         "baseline_correction": BaselineCorrector,
         "msc": MSCTransformer,
