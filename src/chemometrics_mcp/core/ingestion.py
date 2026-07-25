@@ -13,6 +13,7 @@ import re
 import zipfile
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
@@ -149,7 +150,12 @@ class ParserRegistry:
             [float(token) for token in rows[0]]
         except ValueError:
             header = rows.pop(0)
-        if not rows or any(len(row) < 2 for row in rows):
+        if not rows:
+            return (), (IngestionIssue("malformed_input", "Expected an axis and at least one signal column", path),)
+        if len(rows[0]) == 1:
+            # Single-column Y-only file — axis must be reconstructed from JCAMP geometry headers.
+            return self._parse_text_yonly(path, rows, headers)
+        if any(len(row) < 2 for row in rows):
             return (), (IngestionIssue("malformed_input", "Expected an axis and at least one signal column", path),)
         if (
             len(rows) > self.max_rows
@@ -209,6 +215,171 @@ class ParserRegistry:
             for i in range(1, width)
         )
         return measurements, ()
+
+    def _parse_text_yonly(
+        self,
+        path: Path,
+        rows: list[list[str]],
+        headers: dict[str, str],
+    ) -> tuple[tuple[ParsedMeasurement, ...], tuple[IngestionIssue, ...]]:
+        """Parse single-column Y-only files, reconstructing the axis from JCAMP geometry headers.
+
+        Requires FIRSTX and NPOINTS, plus either LASTX (preferred) or DELTAX.
+        If XFACTOR/YFACTOR are present and numeric they are applied; non-numeric
+        values (e.g. the placeholder ``Anything`` used by some exporters) are
+        silently ignored.  Descending axes (FIRSTX > LASTX) are preserved as-is —
+        do not flip or sort.
+        """
+        # --- Parse signal values ---
+        try:
+            signal_list = [float(row[0]) for row in rows]
+        except ValueError:
+            return (), (IngestionIssue("malformed_input", "Non-numeric value in Y-only data rows", path),)
+
+        n_actual = len(signal_list)
+
+        if n_actual > self.max_rows:
+            return (), (
+                IngestionIssue(
+                    "resource_limit_exceeded",
+                    "Input table exceeds configured row/column limits.",
+                    path,
+                ),
+            )
+
+        # --- Validate NPOINTS ---
+        npoints_str = headers.get("NPOINTS")
+        if npoints_str is None:
+            return (), (
+                IngestionIssue(
+                    "jcamp_missing_geometry",
+                    "Single-column Y-only file requires a NPOINTS header for axis reconstruction",
+                    path,
+                ),
+            )
+        try:
+            npoints = int(float(npoints_str))
+        except ValueError:
+            return (), (
+                IngestionIssue(
+                    "jcamp_missing_geometry",
+                    f"NPOINTS header is not numeric: {npoints_str!r}",
+                    path,
+                ),
+            )
+
+        if npoints != n_actual:
+            return (), (
+                IngestionIssue(
+                    "jcamp_npoints_mismatch",
+                    f"NPOINTS={npoints} declared in header but {n_actual} data rows found",
+                    path,
+                    {"npoints_header": npoints, "rows_found": n_actual},
+                ),
+            )
+
+        # --- Require FIRSTX ---
+        firstx_str = headers.get("FIRSTX")
+        if firstx_str is None:
+            return (), (
+                IngestionIssue(
+                    "jcamp_missing_geometry",
+                    "Single-column Y-only file requires a FIRSTX header for axis reconstruction",
+                    path,
+                ),
+            )
+        try:
+            firstx = float(firstx_str)
+        except ValueError:
+            return (), (
+                IngestionIssue(
+                    "jcamp_missing_geometry",
+                    f"FIRSTX header is not numeric: {firstx_str!r}",
+                    path,
+                ),
+            )
+
+        # --- Reconstruct axis from LASTX (preferred) or DELTAX ---
+        lastx_str = headers.get("LASTX")
+        deltax_str = headers.get("DELTAX")
+
+        if lastx_str is not None:
+            try:
+                lastx = float(lastx_str)
+                axis_array = np.linspace(firstx, lastx, npoints)
+            except ValueError:
+                axis_array = None
+        else:
+            axis_array = None
+
+        if axis_array is None and deltax_str is not None:
+            try:
+                deltax = float(deltax_str)
+                axis_array = firstx + deltax * np.arange(npoints)
+            except ValueError:
+                axis_array = None
+
+        if axis_array is None:
+            return (), (
+                IngestionIssue(
+                    "jcamp_missing_geometry",
+                    "Single-column Y-only file requires LASTX or DELTAX for axis reconstruction "
+                    "(FIRSTX was found but neither LASTX nor DELTAX is present/numeric)",
+                    path,
+                ),
+            )
+
+        # --- Apply XFACTOR / YFACTOR if present and numeric (skip silently if non-numeric) ---
+        xfactor_str = headers.get("XFACTOR")
+        if xfactor_str is not None:
+            try:
+                axis_array = axis_array * float(xfactor_str)
+            except ValueError:
+                pass  # non-numeric placeholder — ignore
+
+        signal_array = np.array(signal_list, dtype=float)
+        yfactor_str = headers.get("YFACTOR")
+        if yfactor_str is not None:
+            try:
+                signal_array = signal_array * float(yfactor_str)
+            except ValueError:
+                pass  # non-numeric placeholder — ignore
+
+        # --- Unit / kind mapping (mirrors the 2-column branch exactly) ---
+        x_unit = headers.get("XUNITS")
+        y_unit = headers.get("YUNITS")
+        x_token = (x_unit or "").strip().lower().replace(" ", "")
+        y_token = (y_unit or "").strip().lower().replace(" ", "")
+        axis_kind = (
+            "wavenumber" if x_token in {"cm-1", "cm^-1", "1/cm"}
+            else "wavelength" if x_token in {"nm", "um", "µm"}
+            else "mass_to_charge" if x_token in {"m/z", "mz"}
+            else None
+        )
+        signal_kind = (
+            "percent_transmittance" if y_token in {"%t", "percenttransmittance"}
+            else "absorbance" if y_token in {"abs", "absorbance"}
+            else "reflectance" if y_token in {"%r", "reflectance"}
+            else "counts" if y_token in {"count", "counts"}
+            else None
+        )
+
+        metadata: dict[str, Any] = {"headers": headers} if headers else {}
+
+        return (
+            ParsedMeasurement(
+                path,
+                path.stem,
+                tuple(float(x) for x in axis_array),
+                tuple(float(y) for y in signal_array),
+                "delimited-text-yonly-v1",
+                metadata,
+                axis_kind=axis_kind,
+                axis_unit=x_unit,
+                signal_kind=signal_kind,
+                signal_unit=y_unit,
+            ),
+        ), ()
 
     @staticmethod
     def _tokens(line: str, delimiter: str | None) -> list[str]:

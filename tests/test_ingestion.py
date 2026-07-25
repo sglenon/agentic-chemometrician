@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
 import pandas as pd
 
-from chemometrics_mcp.core.ingestion import ParserRegistry
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from chemometrics_mcp.core.ingestion import ParserRegistry  # noqa: E402
+
+DATASET_DIR = ROOT / "ftir-purity-dataset" / "fwdftirjune262026"
 
 
 def test_two_column_delimited_and_whitespace_layouts(tmp_path) -> None:
@@ -82,3 +91,196 @@ def test_configured_resource_limit_fails_closed(tmp_path) -> None:
     parsed, issues = ParserRegistry(max_file_bytes=4).parse(path)
     assert parsed == ()
     assert issues[0].code == "resource_limit_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Single-column Y-only / JCAMP-axis-reconstruction tests
+# ---------------------------------------------------------------------------
+
+def _make_yonly(tmp_path, extra_headers: str = "", data_lines: list[str] | None = None) -> Path:
+    """Helper: write a minimal single-column .asc file."""
+    path = tmp_path / "spec.asc"
+    n = 5
+    lines = data_lines if data_lines is not None else ["1.0", "2.0", "3.0", "4.0", "5.0"]
+    header = (
+        "##XUNITS=1/CM\n"
+        "##YUNITS=%T\n"
+        f"##FIRSTX=400.0\n"
+        f"##LASTX=500.0\n"
+        f"##NPOINTS={n}.0\n"
+        f"{extra_headers}"
+    )
+    path.write_text(header + "\n".join(lines) + "\n")
+    return path
+
+
+def test_yonly_basic_linspace_axis(tmp_path) -> None:
+    """FIRSTX/LASTX/NPOINTS reconstructs correct axis via linspace."""
+    import numpy as np
+    path = _make_yonly(tmp_path)
+    parsed, issues = ParserRegistry().parse(path)
+    assert not issues, issues
+    assert len(parsed) == 1
+    m = parsed[0]
+    assert m.parser_id == "delimited-text-yonly-v1"
+    assert len(m.axis) == 5
+    assert len(m.signal) == 5
+    expected_axis = np.linspace(400.0, 500.0, 5)
+    for got, exp in zip(m.axis, expected_axis):
+        assert abs(got - exp) < 1e-9, f"{got} != {exp}"
+    assert m.signal == (1.0, 2.0, 3.0, 4.0, 5.0)
+
+
+def test_yonly_deltax_axis(tmp_path) -> None:
+    """FIRSTX/DELTAX/NPOINTS reconstructs correct axis via arange."""
+    path = tmp_path / "spec.asc"
+    path.write_text(
+        "##XUNITS=1/CM\n##YUNITS=ABS\n"
+        "##FIRSTX=100.0\n##DELTAX=10.0\n##NPOINTS=4\n"
+        "1.0\n2.0\n3.0\n4.0\n"
+    )
+    parsed, issues = ParserRegistry().parse(path)
+    assert not issues, issues
+    m = parsed[0]
+    assert m.parser_id == "delimited-text-yonly-v1"
+    assert len(m.axis) == 4
+    for i, expected in enumerate([100.0, 110.0, 120.0, 130.0]):
+        assert abs(m.axis[i] - expected) < 1e-9, f"axis[{i}]={m.axis[i]} != {expected}"
+
+
+def test_yonly_descending_axis_preserved(tmp_path) -> None:
+    """Descending axis (FIRSTX > LASTX) must NOT be flipped or sorted."""
+    path = tmp_path / "desc.asc"
+    path.write_text(
+        "##XUNITS=1/CM\n##YUNITS=%T\n"
+        "##FIRSTX=4000.0\n##LASTX=400.0\n##NPOINTS=3\n"
+        "10.0\n20.0\n30.0\n"
+    )
+    parsed, issues = ParserRegistry().parse(path)
+    assert not issues, issues
+    m = parsed[0]
+    # linspace(4000, 400, 3) = [4000, 2200, 400]
+    assert m.axis[0] > m.axis[-1], "Descending axis was incorrectly flipped"
+    assert abs(m.axis[0] - 4000.0) < 1e-9
+    assert abs(m.axis[-1] - 400.0) < 1e-9
+
+
+def test_yonly_xfactor_yfactor_numeric(tmp_path) -> None:
+    """Numeric XFACTOR and YFACTOR are applied to axis and signal."""
+    path = tmp_path / "factors.asc"
+    path.write_text(
+        "##XUNITS=1/CM\n##YUNITS=%T\n"
+        "##FIRSTX=100.0\n##LASTX=200.0\n##NPOINTS=3\n"
+        "##XFACTOR=2.0\n##YFACTOR=0.5\n"
+        "10.0\n20.0\n30.0\n"
+    )
+    parsed, issues = ParserRegistry().parse(path)
+    assert not issues, issues
+    m = parsed[0]
+    # axis * XFACTOR: linspace(100,200,3)=[100,150,200] * 2 = [200,300,400]
+    assert abs(m.axis[0] - 200.0) < 1e-9
+    assert abs(m.axis[1] - 300.0) < 1e-9
+    assert abs(m.axis[2] - 400.0) < 1e-9
+    # signal * YFACTOR: [10,20,30] * 0.5 = [5,10,15]
+    assert abs(m.signal[0] - 5.0) < 1e-9
+    assert abs(m.signal[1] - 10.0) < 1e-9
+    assert abs(m.signal[2] - 15.0) < 1e-9
+
+
+def test_yonly_nonnumeric_yfactor_ignored(tmp_path) -> None:
+    """Non-numeric YFACTOR (e.g. 'Anything') is silently ignored — no error."""
+    path = tmp_path / "placeholder.asc"
+    path.write_text(
+        "##XUNITS=1/CM\n##YUNITS=%T\n"
+        "##FIRSTX=400.0\n##LASTX=500.0\n##NPOINTS=3\n"
+        "##YFACTOR=Anything\n"
+        "10.0\n20.0\n30.0\n"
+    )
+    parsed, issues = ParserRegistry().parse(path)
+    assert not issues, issues
+    m = parsed[0]
+    # signal unchanged (factor skipped)
+    assert m.signal == (10.0, 20.0, 30.0)
+
+
+def test_yonly_axis_kind_signal_kind_mapped(tmp_path) -> None:
+    """XUNITS/YUNITS are mapped to axis_kind/signal_kind correctly."""
+    path = _make_yonly(tmp_path)
+    parsed, _ = ParserRegistry().parse(path)
+    m = parsed[0]
+    assert m.axis_kind == "wavenumber"
+    assert m.signal_kind == "percent_transmittance"
+    assert m.axis_unit == "1/CM"
+    assert m.signal_unit == "%T"
+
+
+def test_yonly_npoints_mismatch_rejected(tmp_path) -> None:
+    """NPOINTS != len(rows) produces jcamp_npoints_mismatch issue."""
+    path = tmp_path / "mismatch.asc"
+    # Claim 10 points but only provide 3
+    path.write_text(
+        "##FIRSTX=400.0\n##LASTX=500.0\n##NPOINTS=10\n"
+        "1.0\n2.0\n3.0\n"
+    )
+    parsed, issues = ParserRegistry().parse(path)
+    assert not parsed
+    assert issues[0].code == "jcamp_npoints_mismatch"
+    assert issues[0].details["npoints_header"] == 10
+    assert issues[0].details["rows_found"] == 3
+
+
+def test_yonly_missing_geometry_rejected(tmp_path) -> None:
+    """Single-column file with no geometry headers is rejected cleanly."""
+    path = tmp_path / "nogeom.asc"
+    # No FIRSTX/LASTX/NPOINTS — must reject, not silently create index axis
+    path.write_text("1.0\n2.0\n3.0\n")
+    parsed, issues = ParserRegistry().parse(path)
+    assert not parsed
+    assert issues[0].code == "jcamp_missing_geometry"
+
+
+def test_yonly_missing_lastx_and_deltax_rejected(tmp_path) -> None:
+    """FIRSTX + NPOINTS but neither LASTX nor DELTAX → jcamp_missing_geometry."""
+    path = tmp_path / "partial.asc"
+    path.write_text(
+        "##FIRSTX=400.0\n##NPOINTS=3\n"
+        "1.0\n2.0\n3.0\n"
+    )
+    parsed, issues = ParserRegistry().parse(path)
+    assert not parsed
+    assert issues[0].code == "jcamp_missing_geometry"
+
+
+def test_yonly_real_file_3fc1(tmp_path) -> None:
+    """Real dataset file 3fc1.asc parses without issues."""
+    asc = DATASET_DIR / "3fc1.asc"
+    if not asc.exists():
+        import pytest
+        pytest.skip(f"Real dataset file not present: {asc}")
+    parsed, issues = ParserRegistry().parse(asc)
+    assert not issues, [i.message for i in issues]
+    assert len(parsed) == 1
+    m = parsed[0]
+    assert m.parser_id == "delimited-text-yonly-v1"
+    assert len(m.axis) == 1868
+    assert len(m.signal) == 1868
+    assert m.axis_kind == "wavenumber"
+    assert m.signal_kind == "percent_transmittance"
+    # Axis should span ~399 to ~4000 cm-1
+    assert min(m.axis) > 390.0
+    assert max(m.axis) < 4010.0
+
+
+def test_yonly_real_file_8ami1(tmp_path) -> None:
+    """Real dataset file 8ami1.asc parses without issues."""
+    asc = DATASET_DIR / "8ami1.asc"
+    if not asc.exists():
+        import pytest
+        pytest.skip(f"Real dataset file not present: {asc}")
+    parsed, issues = ParserRegistry().parse(asc)
+    assert not issues, [i.message for i in issues]
+    assert len(parsed) == 1
+    m = parsed[0]
+    assert m.parser_id == "delimited-text-yonly-v1"
+    assert len(m.axis) == 1868
+    assert len(m.signal) == 1868
