@@ -303,3 +303,97 @@ class TestPreprocessSpectraTool:
             assert not np.allclose(raw_arr, tr_arr)
             # SNV output has std ≈ 1
             assert abs(tr_arr.std() - 1.0) < 0.05
+
+
+# ---------------------------------------------------------------------------
+# preprocess_spectra — figures rendering
+# ---------------------------------------------------------------------------
+
+class TestPreprocessSpectraFigures:
+    """Tests for before/after overlay and derivative overlay SVG figures."""
+
+    def _make_csv_file(self, tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarray]:
+        X, axis = _synth_spectra(4, 60)
+        fpath = tmp_path / "spectra.csv"
+        _write_csv(fpath, axis, X, names=[f"s{i}" for i in range(4)])
+        return fpath, X, axis
+
+    def test_figures_key_present_in_result(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "snv"}])
+        assert "figures" in result
+        assert isinstance(result["figures"], dict)
+
+    def test_before_and_after_overlay_present(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "snv"}])
+        figs = result["figures"]
+        assert "before-overlay.svg" in figs
+        assert "after-overlay.svg" in figs
+
+    def test_svgs_are_non_empty_strings(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "snv"}])
+        for key, svg in result["figures"].items():
+            assert isinstance(svg, str) and len(svg) > 0, f"{key} SVG is empty"
+            assert "<svg" in svg, f"{key} does not look like SVG"
+
+    def test_no_derivative_overlay_without_deriv_step(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "snv"}])
+        assert "derivative-overlay.svg" not in result["figures"]
+
+    def test_derivative_overlay_present_for_sg1(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "sg_1st_deriv"}])
+        assert "derivative-overlay.svg" in result["figures"]
+        svg = result["figures"]["derivative-overlay.svg"]
+        assert "1st-Derivative" in svg
+
+    def test_derivative_overlay_present_for_sg2(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "sg_2nd_deriv"}])
+        assert "derivative-overlay.svg" in result["figures"]
+        assert "2nd-Derivative" in result["figures"]["derivative-overlay.svg"]
+
+    def test_derivative_overlay_present_for_sg3(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "sg_3rd_deriv"}])
+        assert "derivative-overlay.svg" in result["figures"]
+        assert "3rd-Derivative" in result["figures"]["derivative-overlay.svg"]
+
+    def test_multi_step_with_derivative_has_all_figures(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(
+            str(fpath),
+            steps=[
+                {"name": "region_select", "min": 1500.0, "max": 3000.0},
+                {"name": "snv"},
+                {"name": "sg_2nd_deriv"},
+            ],
+        )
+        figs = result["figures"]
+        assert "before-overlay.svg" in figs
+        assert "after-overlay.svg" in figs
+        assert "derivative-overlay.svg" in figs
+
+    def test_single_sample_does_not_crash(self, tmp_path: Path) -> None:
+        X, axis = _synth_spectra(1, 60)
+        fpath = tmp_path / "single.csv"
+        _write_csv(fpath, axis, X, names=["only_sample"])
+        result = preprocess_spectra(str(fpath), steps=[{"name": "snv"}])
+        assert "figures" in result
+        assert "before-overlay.svg" in result["figures"]
+        assert "after-overlay.svg" in result["figures"]
+
+    def test_before_overlay_title_in_svg(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "snv"}])
+        before_svg = result["figures"]["before-overlay.svg"]
+        assert "Raw Spectra" in before_svg
+
+    def test_after_overlay_references_step_name(self, tmp_path: Path) -> None:
+        fpath, _, _ = self._make_csv_file(tmp_path)
+        result = preprocess_spectra(str(fpath), steps=[{"name": "snv"}])
+        after_svg = result["figures"]["after-overlay.svg"]
+        assert "snv" in after_svg

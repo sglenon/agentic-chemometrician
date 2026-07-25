@@ -14,6 +14,7 @@ import numpy as np
 
 from chemometrics_mcp.core.ingestion import ParserRegistry
 from chemometrics_mcp.core import preprocessing as _pre
+from chemometrics_mcp.core.preprocessing_dashboard import render_preprocessing_figures
 
 
 def preprocess_spectra(
@@ -48,6 +49,12 @@ def preprocess_spectra(
     - ``n_features_before``: number of spectral features before preprocessing.
     - ``n_features_after``: number of spectral features after preprocessing.
     - ``issues``: list of ingestion issue descriptions (non-fatal).
+    - ``figures``: dict mapping figure filename to inline SVG string.
+      Always includes ``"before-overlay.svg"`` and ``"after-overlay.svg"``
+      (one line per sample, up to 24 samples).  Includes
+      ``"derivative-overlay.svg"`` only when a Savitzky-Golay derivative step
+      (``"sg_1st_deriv"``, ``"sg_2nd_deriv"``, or ``"sg_3rd_deriv"``) was
+      applied; the title reflects the derivative order.
     """
     path = Path(source_path)
     registry = ParserRegistry()
@@ -141,5 +148,8 @@ def preprocess_spectra(
     # Fix steps list — we already popped "name" from dicts above; re-derive from
     # step_details_list which each contain a "method" key.
     result["steps"] = [d.get("method", "unknown") for d in step_details_list]
+
+    # Render before/after overlay figures (and derivative overlay when applicable).
+    result["figures"] = render_preprocessing_figures(result)
 
     return result
