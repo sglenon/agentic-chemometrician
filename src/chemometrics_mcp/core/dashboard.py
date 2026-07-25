@@ -1177,6 +1177,111 @@ def _task_tables_and_figures(
             "Constrained mixture-screening coefficients",
         )
 
+    # Consensus leaderboard figure — additive, guarded on task_result["consensus"].
+    consensus = task_result.get("consensus")
+    if isinstance(consensus, Mapping):
+        leaderboard = list(consensus.get("leaderboard", ()))
+        if leaderboard:
+            figure(
+                "consensus-leaderboard.svg",
+                _bar_svg(
+                    [
+                        {
+                            "label": (
+                                f"{row['candidate_identity']}"
+                                f" (±{_fmt(row['cv_metric_std'])} std)"
+                            ),
+                            "value": row["cv_metric_mean"],
+                        }
+                        for row in leaderboard
+                    ],
+                    title="Candidate leaderboard: CV metric across folds",
+                    value_label="CV metric (mean)",
+                ),
+                "Candidate leaderboard",
+            )
+        # Feature-importance consensus figure — one line per estimator.
+        feature_importance = list(consensus.get("feature_importance", ()))
+        if feature_importance:
+            importance_series = []
+            for entry in feature_importance:
+                axis_v = _finite_vector(entry.get("axis"))
+                imp_v = _finite_vector(entry.get("importance"))
+                if axis_v is not None and imp_v is not None and len(axis_v) == len(imp_v):
+                    importance_series.append({
+                        "label": str(entry.get("candidate_identity", "candidate")),
+                        "x": axis_v,
+                        "y": imp_v,
+                    })
+            figure(
+                "feature-importance-consensus.svg",
+                _line_svg(
+                    importance_series,
+                    title="Feature importance consensus (permutation importance)",
+                    x_label="Wavenumber / wavelength",
+                    y_label="Permutation importance",
+                ),
+                "Feature importance consensus",
+            )
+
+    # Mixture consensus figure — additive, guarded on task_result["mixture_consensus"].
+    mixture_consensus = task_result.get("mixture_consensus")
+    if isinstance(mixture_consensus, Mapping):
+        ref_names = list(mixture_consensus.get("reference_names") or ())
+        mixture_ids = list(mixture_consensus.get("mixture_ids") or ())
+        pipeline_names = ["constrained-nnls", "pls2-compositional"]
+        consensus_rows: list[dict[str, Any]] = []
+        for pipeline_name in pipeline_names:
+            pipeline_data = mixture_consensus.get(pipeline_name)
+            if not isinstance(pipeline_data, Mapping):
+                continue
+            for mix_idx, coefficients_row in enumerate(
+                pipeline_data.get("coefficients") or ()
+            ):
+                mix_id = (
+                    mixture_ids[mix_idx]
+                    if mix_idx < len(mixture_ids)
+                    else mix_idx
+                )
+                for comp_idx, coef in enumerate(coefficients_row or ()):
+                    ref = (
+                        ref_names[comp_idx]
+                        if comp_idx < len(ref_names)
+                        else comp_idx
+                    )
+                    try:
+                        coef_float = float(coef)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(coef_float):
+                        consensus_rows.append({
+                            "mixture_id": mix_id,
+                            "pipeline": pipeline_name,
+                            "reference": ref,
+                            "coefficient": coef_float,
+                        })
+        table(
+            "mixture-consensus.csv",
+            ("mixture_id", "pipeline", "reference", "coefficient"),
+            consensus_rows,
+            "Mixture consensus (both pipelines)",
+        )
+        figure(
+            "mixture-consensus.svg",
+            _bar_svg(
+                [
+                    {
+                        "label": f"{row['pipeline']} · {row['mixture_id']} · {row['reference']}",
+                        "value": row["coefficient"],
+                    }
+                    for row in consensus_rows
+                ],
+                title="Mixture consensus: both pipelines' coefficients",
+                value_label="coefficient",
+            ),
+            "Mixture consensus",
+        )
+
     transformations = []
     for row in task_result.get("measurement_provenance", ()):
         for conversion in row.get("conversions", ()):

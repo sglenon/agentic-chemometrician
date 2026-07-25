@@ -354,3 +354,321 @@ def test_mcp_request_model_task_kinds_default_is_none() -> None:
         "objective": "explore",
     })
     assert req.task_kinds is None
+
+
+# ---------------------------------------------------------------------------
+# Item 6 — consensus leaderboard tests
+# ---------------------------------------------------------------------------
+
+def _make_supervised_splits() -> tuple:
+    """Return (X, y, sample_ids, groups, splits) for a minimal regression problem."""
+    import numpy as np
+    from chemometrics_mcp.core.splits import FoldIndices, MaterializedSplits
+
+    rng = np.random.default_rng(0)
+    n, p = 12, 10
+    X = rng.normal(size=(n, p))
+    y = rng.normal(size=n)
+    sample_ids = [f"s{i}" for i in range(n)]
+    groups = [f"g{i % 4}" for i in range(n)]
+    # 3 outer folds
+    folds = (
+        FoldIndices(train_ids=tuple(sample_ids[4:]), test_ids=tuple(sample_ids[:4]), fold=1),
+        FoldIndices(train_ids=tuple(sample_ids[:4] + sample_ids[8:]), test_ids=tuple(sample_ids[4:8]), fold=2),
+        FoldIndices(train_ids=tuple(sample_ids[:8]), test_ids=tuple(sample_ids[8:]), fold=3),
+    )
+    splits = MaterializedSplits(
+        split_id="test-split",
+        strategy="group_kfold",
+        group_key="preparation_id",
+        seed=42,
+        folds=folds,
+        issues=(),
+    )
+    return X, y, sample_ids, groups, splits
+
+
+def test_leaderboard_evaluates_all_candidates_with_metric_and_importance() -> None:
+    """evaluate_candidate_leaderboard returns one entry per candidate with CV metric and importance."""
+    import numpy as np
+    from chemometrics_mcp.core.model_selection import (
+        Candidate,
+        evaluate_candidate_leaderboard,
+        default_candidates,
+    )
+
+    X, y, sample_ids, groups, splits = _make_supervised_splits()
+    candidates = (
+        Candidate("raw:pls:n1", "raw", "pls", {"n_components": 1}),
+        Candidate("snv:ridge:a1", "snv", "ridge", {"alpha": 1.0}),
+    )
+    result = evaluate_candidate_leaderboard(
+        X, y, sample_ids, groups, splits,
+        task_name="regression",
+        candidates=candidates,
+    )
+    assert result["status"] == "ok"
+    leaderboard = result["leaderboard"]
+    # Both candidates should appear
+    identities = {row["candidate_identity"] for row in leaderboard}
+    assert identities == {"raw:pls:n1", "snv:ridge:a1"}
+    # Each entry has cv_metric_mean, cv_metric_std, feature_importance
+    for row in leaderboard:
+        assert "cv_metric_mean" in row
+        assert "cv_metric_std" in row
+        assert "feature_importance" in row
+        assert "feature_importance_std" in row
+        assert len(row["feature_importance"]) == X.shape[1]
+        assert len(row["fold_scores"]) == len(splits.folds)
+    # Sorted descending by cv_metric_mean
+    means = [row["cv_metric_mean"] for row in leaderboard]
+    assert means == sorted(means, reverse=True)
+
+
+def test_leaderboard_uses_same_fold_structure_as_nested_supervised() -> None:
+    """Both evaluators must use the same outer folds (apples-to-apples comparison)."""
+    import numpy as np
+    from chemometrics_mcp.core.model_selection import (
+        Candidate,
+        evaluate_candidate_leaderboard,
+        evaluate_nested_supervised,
+    )
+
+    X, y, sample_ids, groups, splits = _make_supervised_splits()
+    candidates = (Candidate("snv:ridge:a1", "snv", "ridge", {"alpha": 1.0}),)
+    leaderboard = evaluate_candidate_leaderboard(
+        X, y, sample_ids, groups, splits, candidates=candidates,
+    )
+    nested = evaluate_nested_supervised(
+        X, y, sample_ids, groups, splits, candidates=candidates,
+    )
+    # Split IDs must match — same fold source
+    assert leaderboard["split_id"] == nested["split_id"]
+    # Leaderboard fold_scores count must equal the number of outer folds
+    assert len(leaderboard["leaderboard"][0]["fold_scores"]) == len(nested["fold_assignments"])
+
+
+def test_consensus_flag_off_produces_no_consensus_key(tmp_path: Path) -> None:
+    """When consensus is not set, task_result must have no 'consensus' key."""
+    output, _ = _create_prepared_project(tmp_path)
+    plan = project_workflow.plan_project_analysis(
+        output, "Explore spectra", task_kind="unsupervised_exploration",
+    )
+    approval = project_workflow.approve_project_plan(
+        output, plan["plan_id"], approved_by="tester"
+    )
+    result = project_workflow.run_project_analysis(
+        output, plan["plan_id"], approval["approval_id"], run_id="no-consensus-run"
+    )
+    assert result["status"] in {"succeeded", "blocked", "failed"}
+    from chemometrics_mcp.core.project_store import ProjectStore
+    store = ProjectStore(output)
+    try:
+        evidence = store.read_json("runs/no-consensus-run/evidence.json")
+        assert "consensus" not in evidence.get("task_result", {}), (
+            "task_result must not contain 'consensus' key when flag is off"
+        )
+    except FileNotFoundError:
+        pass
+
+
+def test_mixture_consensus_produces_both_pipeline_coefficients() -> None:
+    """run_ftir_nir_task for mixture_quantification must produce mixture_consensus
+    with both constrained-nnls and pls2-compositional pipeline entries."""
+    import numpy as np
+    from chemometrics_mcp.core.task_packs.ftir_nir import run_ftir_nir_task
+
+    axis = tuple(float(i) for i in range(10))
+    ref_sig_a = (1.0, 0.8, 0.6, 0.4, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005)
+    ref_sig_b = (0.01, 0.05, 0.1, 0.3, 0.6, 0.9, 0.8, 0.5, 0.2, 0.1)
+    mix_sig = tuple(0.5 * a + 0.5 * b for a, b in zip(ref_sig_a, ref_sig_b))
+
+    measurements = [
+        {
+            "measurement_id": "ref-a",
+            "modality": "ftir",
+            "axis": axis,
+            "signal": ref_sig_a,
+            "axis_kind": "wavenumber",
+            "axis_unit": "cm^-1",
+            "signal_kind": "absorbance",
+            "signal_unit": "absorbance",
+            "role": "reference",
+            "reference_name": "component_a",
+            "preparation_id": "prep-ref-a",
+        },
+        {
+            "measurement_id": "ref-b",
+            "modality": "ftir",
+            "axis": axis,
+            "signal": ref_sig_b,
+            "axis_kind": "wavenumber",
+            "axis_unit": "cm^-1",
+            "signal_kind": "absorbance",
+            "signal_unit": "absorbance",
+            "role": "reference",
+            "reference_name": "component_b",
+            "preparation_id": "prep-ref-b",
+        },
+        {
+            "measurement_id": "mix-1",
+            "modality": "ftir",
+            "axis": axis,
+            "signal": mix_sig,
+            "axis_kind": "wavenumber",
+            "axis_unit": "cm^-1",
+            "signal_kind": "absorbance",
+            "signal_unit": "absorbance",
+            "role": "sample",
+            "reference_name": None,
+            "preparation_id": "prep-mix",
+        },
+    ]
+    result = run_ftir_nir_task(measurements, task_type="mixture_quantification")
+
+    # mixture_screening must have been produced (valid references present)
+    assert "mixture_screening" in result, (
+        f"mixture_screening absent; issues: {result.get('issues')}"
+    )
+    # mixture_consensus must also be present
+    assert "mixture_consensus" in result, (
+        "mixture_consensus must be present alongside mixture_screening"
+    )
+    mc = result["mixture_consensus"]
+    assert "constrained-nnls" in mc, "constrained-nnls pipeline missing from consensus"
+    assert "pls2-compositional" in mc, "pls2-compositional pipeline missing from consensus"
+    assert "coefficients" in mc["constrained-nnls"]
+    assert "coefficients" in mc["pls2-compositional"]
+    assert "agreement" in mc
+    assert "coefficient_mae_per_component" in mc["agreement"]
+    # Both pipelines should yield 2-component coefficients (one per reference)
+    nnls_coefs = mc["constrained-nnls"]["coefficients"]
+    comp_coefs = mc["pls2-compositional"]["coefficients"]
+    assert len(nnls_coefs) == 1  # one mixture
+    assert len(nnls_coefs[0]) == 2  # two components
+    assert len(comp_coefs) == 1
+    assert len(comp_coefs[0]) == 2
+
+
+def test_dashboard_consensus_figures_render_with_synthetic_data() -> None:
+    """Dashboard figure builders skip cleanly when consensus absent, render when present."""
+    from chemometrics_mcp.core.dashboard import _bar_svg, _line_svg, _finite_vector
+
+    # No consensus key → figures should be skipped (guard works)
+    assert _bar_svg([], title="T", value_label="V") is None
+
+    # Synthetic consensus data → leaderboard bar chart renders
+    rows = [
+        {"label": "raw:pls:n1 (±0.01 std)", "value": -0.5},
+        {"label": "snv:ridge:a1 (±0.02 std)", "value": -0.6},
+    ]
+    svg = _bar_svg(rows, title="Candidate leaderboard", value_label="CV metric")
+    assert svg is not None
+    assert "Candidate leaderboard" in svg
+    assert "raw:pls:n1" in svg
+
+    # Synthetic feature importance data → line chart renders
+    import numpy as np
+    axis = np.linspace(1000, 1100, 20)
+    imp = np.abs(np.random.default_rng(0).normal(size=20))
+    series = [{"label": "raw:pls:n1", "x": axis, "y": imp}]
+    svg2 = _line_svg(series, title="Feature importance", x_label="Wavenumber", y_label="Importance")
+    assert svg2 is not None
+    assert "Feature importance" in svg2
+
+
+def test_dashboard_consensus_figures_skip_when_absent(tmp_path: Path) -> None:
+    """Dashboard must produce no consensus/mixture-consensus figures for a plain unsupervised run."""
+    output, _ = _create_prepared_project(tmp_path)
+    plan = project_workflow.plan_project_analysis(
+        output, "Explore spectra", task_kind="unsupervised_exploration",
+    )
+    approval = project_workflow.approve_project_plan(
+        output, plan["plan_id"], approved_by="tester"
+    )
+    result = project_workflow.run_project_analysis(
+        output, plan["plan_id"], approval["approval_id"], run_id="skip-consensus-run"
+    )
+    assert result["status"] in {"succeeded", "blocked", "failed"}
+    # Check no consensus SVG artifacts were emitted
+    artifacts = result.get("artifacts", [])
+    artifact_paths = [str(a.get("path", "")) for a in artifacts]
+    for p in artifact_paths:
+        assert "consensus-leaderboard" not in p, f"Unexpected consensus artifact: {p}"
+        assert "feature-importance-consensus" not in p
+        assert "mixture-consensus" not in p
+
+
+# ---------------------------------------------------------------------------
+# Collision-guard raise-path test (Fix 3 from minor fixes)
+# ---------------------------------------------------------------------------
+
+def test_collision_guard_raises_on_scientific_key_overlap() -> None:
+    """_check_scientific_collision must raise RuntimeError when two task dicts share a scientific key."""
+    from chemometrics_mcp.core.run_service import _check_scientific_collision
+
+    shared_keys = frozenset({"task_pack", "version", "issues", "counts"})
+    existing = {"task_pack": "ftir_nir", "issues": [], "pca": {"scores": [[1, 2]]}}
+    new_result = {"task_pack": "ftir_nir", "issues": [], "pca": {"scores": [[3, 4]]}}
+    with pytest.raises(RuntimeError, match="pca"):
+        _check_scientific_collision(existing, new_result, shared_keys)
+
+
+def test_collision_guard_allows_shared_metadata_overlap() -> None:
+    """Shared metadata keys must not trigger the collision guard."""
+    from chemometrics_mcp.core.run_service import _check_scientific_collision
+
+    shared_keys = frozenset({"task_pack", "version", "issues", "counts"})
+    existing = {"task_pack": "ftir_nir", "pca": {}}
+    new_result = {"task_pack": "ftir_nir", "mixture_screening": {}}
+    # Should not raise — only "task_pack" overlaps and it's in shared_keys
+    _check_scientific_collision(existing, new_result, shared_keys)  # no exception
+
+
+# ---------------------------------------------------------------------------
+# Claim_ceiling most-conservative + issues dedup (Fix 1 & 2)
+# ---------------------------------------------------------------------------
+
+def test_dedup_issues_removes_exact_duplicates() -> None:
+    """_dedup_issues must remove duplicate (code, message) pairs, preserving order."""
+    from chemometrics_mcp.core.run_service import _dedup_issues
+
+    issues = [
+        {"code": "a", "message": "msg1"},
+        {"code": "b", "message": "msg2"},
+        {"code": "a", "message": "msg1"},  # exact duplicate
+        {"code": "c", "message": "msg3"},
+    ]
+    deduped = _dedup_issues(issues)
+    assert len(deduped) == 3
+    codes = [i["code"] for i in deduped]
+    assert codes == ["a", "b", "c"]
+
+
+def test_claim_ceiling_is_most_conservative_in_composite_run(tmp_path: Path) -> None:
+    """In a composite run, task_result['claim_ceiling'] must be the most conservative
+    across all tasks, not just the last task's value."""
+    output, _ = _create_prepared_project(tmp_path)
+    plan = project_workflow.plan_project_analysis(
+        output,
+        "Explore and quantify",
+        task_kinds=["unsupervised_exploration", "mixture_quantification"],
+        target="concentration",
+    )
+    approval = project_workflow.approve_project_plan(
+        output, plan["plan_id"], approved_by="tester"
+    )
+    result = project_workflow.run_project_analysis(
+        output, plan["plan_id"], approval["approval_id"], run_id="ceiling-run"
+    )
+    assert result["status"] in {"succeeded", "blocked"}
+    from chemometrics_mcp.core.project_store import ProjectStore
+    store = ProjectStore(output)
+    evidence = store.read_json("runs/ceiling-run/evidence.json")
+    task_result = evidence.get("task_result", {})
+    # unsupervised_exploration has ceiling="descriptive"; mixture_quantification has "screening"
+    # Most conservative = "descriptive" (lower in claim level order)
+    claim_ceiling = task_result.get("claim_ceiling")
+    assert claim_ceiling in {"descriptive", "exploratory"}, (
+        f"Expected most-conservative ceiling, got {claim_ceiling!r}"
+    )

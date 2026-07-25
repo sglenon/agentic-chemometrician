@@ -69,6 +69,38 @@ def _has_blocker(items: Sequence[Mapping[str, Any]]) -> bool:
     return any(str(item.get("level")) == "blocker" for item in items)
 
 
+def _check_scientific_collision(
+    existing: dict[str, Any],
+    new: dict[str, Any],
+    shared_keys: frozenset[str],
+) -> None:
+    """Raise RuntimeError if two task result dicts share a scientific result key.
+
+    Shared metadata keys (task_pack, counts, etc.) are explicitly allowed to
+    overlap — only task-specific scientific result keys must be disjoint.
+    """
+    collisions = (set(existing.keys()) & set(new.keys())) - shared_keys
+    if collisions:
+        raise RuntimeError(
+            f"Task-specific scientific result key collision detected "
+            f"between tasks: {sorted(collisions)}. "
+            f"Each task pack must write to distinct scientific result "
+            f"keys (pca, mixture_screening, evaluation, etc.)."
+        )
+
+
+def _dedup_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deduplicate issues by (code, message) identity; preserve original order."""
+    seen: set[tuple[str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for issue in issues:
+        key = (str(issue.get("code", "")), str(issue.get("message", "")))
+        if key not in seen:
+            seen.add(key)
+            result.append(issue)
+    return result
+
+
 def _package_version() -> str:
     try:
         return importlib.metadata.version("agentic-chemometrician")
@@ -269,26 +301,39 @@ class ProjectRunService:
                 )
                 per_task_results.append((task, single_result))
 
-                # Collision check: only on task-specific scientific result keys.
-                # Shared metadata keys (task_pack, counts, etc.) are safe to
-                # overwrite — both tasks produce identical values for them.
-                scientific_collisions = (
-                    set(task_result.keys()) & set(single_result.keys())
-                ) - _SHARED_METADATA_KEYS
-                if scientific_collisions:
-                    raise RuntimeError(
-                        f"Task-specific scientific result key collision detected "
-                        f"between tasks: {sorted(scientific_collisions)}. "
-                        f"Each task pack must write to distinct scientific result "
-                        f"keys (pca, mixture_screening, evaluation, etc.)."
-                    )
-                # Merge: concatenate issues, union all other keys (last task wins
-                # for shared metadata keys, distinct scientific keys accumulate).
-                merged_issues = list(task_result.pop("issues", [])) + list(
-                    single_result.get("issues", [])
+                # Collision check via extracted helper: only on task-specific
+                # scientific result keys.  Shared metadata keys (task_pack, counts,
+                # etc.) are safe to overwrite.
+                _check_scientific_collision(task_result, single_result, _SHARED_METADATA_KEYS)
+                # Merge: concatenate + deduplicate issues, union all other keys
+                # (last task wins for shared metadata keys, distinct scientific
+                # keys accumulate).  Issues are deduplicated so that tasks sharing
+                # the same underlying measurements don't repeat identical advisories.
+                merged_issues = _dedup_issues(
+                    list(task_result.pop("issues", []))
+                    + list(single_result.get("issues", []))
                 )
                 task_result.update(single_result)
                 task_result["issues"] = merged_issues
+
+            # Fix: claim_ceiling is task-type-dependent (e.g. "descriptive" for
+            # PCA, "screening" for mixture).  After the merge loop the field
+            # holds only the LAST task's value, which misrepresents the merged
+            # result.  Set it to the most-conservative value across all tasks so
+            # no caller is misled.  The authoritative per-task breakdown is always
+            # in per_task_claim_eligibility.
+            if is_composite and "claim_ceiling" in task_result:
+                _claim_order = [level.value for level in ClaimLevel]
+                collected_ceilings = [
+                    str(r.get("claim_ceiling", "descriptive"))
+                    for _, r in per_task_results
+                    if "claim_ceiling" in r
+                ]
+                if collected_ceilings:
+                    task_result["claim_ceiling"] = min(
+                        collected_ceilings,
+                        key=lambda v: _claim_order.index(v) if v in _claim_order else 0,
+                    )
 
             result_issues = _issues(task_result.get("issues", ()))
             if (
@@ -661,6 +706,7 @@ class ProjectRunService:
                 target,
                 pipeline_families,
                 split_manifest,
+                task_options=task_options,
             )
         if task_type == "uvvis_job_plot":
             return self._uvvis_job(measurements, target, task_options)
@@ -887,6 +933,7 @@ class ProjectRunService:
         target: str | None,
         pipeline_families: Sequence[str],
         split_manifest: Any,
+        task_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not rows or any(not row["preparation_id"] for row in rows):
             return {
@@ -1059,7 +1106,7 @@ class ProjectRunService:
             candidates=candidates,
         )
         issues = list(splits.issues)
-        return {
+        result: dict[str, Any] = {
             "task_pack": "supervised",
             "claim_ceiling": "screening",
             "issues": issues,
@@ -1068,6 +1115,44 @@ class ProjectRunService:
             "target": target,
             "signal_semantics": list(resolved_semantics)[0],
         }
+
+        # Optional consensus leaderboard: run ALL candidates on the same folds
+        # and compute permutation-importance, providing multi-method cross-validation.
+        # Activated by analysis_options.consensus = true; purely additive — the
+        # primary nested-selection `evaluation` key is completely unaffected.
+        opts = dict(task_options) if task_options else {}
+        if opts.get("consensus", False):
+            from chemometrics_mcp.core.model_selection import evaluate_candidate_leaderboard
+            axis_list = (
+                np.asarray(rows[0]["axis"]).tolist()
+                if rows
+                else []
+            )
+            leaderboard_result = evaluate_candidate_leaderboard(
+                np.asarray(signals),
+                values,
+                sample_ids,
+                groups,
+                splits,
+                task_name=task_type,
+                candidates=candidates,
+            )
+            result["consensus"] = {
+                "status": leaderboard_result.get("status", "blocked"),
+                "leaderboard": leaderboard_result.get("leaderboard", []),
+                "feature_importance": [
+                    {
+                        "candidate_identity": row["candidate_identity"],
+                        "importance": row["feature_importance"],
+                        "importance_std": row["feature_importance_std"],
+                        "axis": axis_list,
+                    }
+                    for row in leaderboard_result.get("leaderboard", [])
+                ],
+                "warnings": leaderboard_result.get("warnings", []),
+            }
+
+        return result
 
     @staticmethod
     def _approved_candidates(

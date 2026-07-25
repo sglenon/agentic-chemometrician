@@ -178,4 +178,51 @@ def run_ftir_nir_task(measurements: Sequence[Mapping[str, Any]], task_type: str 
                 item["measurement_id"] for item in mixtures
             ]
             result["mixture_screening"] = mixture_screening
+
+            # Mixture consensus: run both catalogue pipelines side-by-side for comparison.
+            # The official primary result above uses sum_to_one=True (pls2-compositional).
+            # Here we also run sum_to_one=False (constrained-nnls) and store both so a
+            # scientist can see whether the two methods agree on the coefficients.
+            ref_sigs = [item["signal"] for item in references]
+            mix_sigs = [item["signal"] for item in mixtures]
+            ref_names = [str(item["measurement"]["reference_name"]) for item in references]
+            ref_roles = [str(item["measurement"].get("role")) for item in references]
+            try:
+                nnls_result = estimate_mixtures(
+                    ref_sigs, mix_sigs,
+                    sum_to_one=False,
+                    reference_names=ref_names,
+                    reference_roles=ref_roles,
+                )
+                compositional_coeffs = mixture_screening["coefficients"]
+                nnls_coeffs = nnls_result["coefficients"]
+                # Per-component MAE across all mixtures between the two methods.
+                comp_arr = np.asarray(compositional_coeffs, dtype=float)
+                nnls_arr = np.asarray(nnls_coeffs, dtype=float)
+                mae_per_component: list[float] = np.abs(comp_arr - nnls_arr).mean(axis=0).tolist()
+                result["mixture_consensus"] = {
+                    "reference_names": ref_names,
+                    "mixture_ids": mixture_screening["mixture_measurement_ids"],
+                    "constrained-nnls": {
+                        "coefficients": nnls_coeffs,
+                        "rmse": nnls_result["rmse"],
+                        "closure_error": nnls_result["closure_error"],
+                    },
+                    "pls2-compositional": {
+                        "coefficients": compositional_coeffs,
+                        "rmse": mixture_screening["rmse"],
+                        "closure_error": mixture_screening["closure_error"],
+                    },
+                    "agreement": {
+                        "coefficient_mae_per_component": mae_per_component,
+                    },
+                }
+            except Exception as _exc:  # noqa: BLE001
+                result.setdefault("issues", []).append(
+                    _issue(
+                        "mixture_consensus_failed",
+                        f"Mixture consensus computation failed: {_exc}",
+                        "advisory",
+                    )
+                )
     return result
