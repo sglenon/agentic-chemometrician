@@ -30,12 +30,41 @@ def _fit(reference: np.ndarray, mixture: np.ndarray, closure: bool) -> np.ndarra
     design = reference.T
     if not closure:
         return nnls(design, mixture)[0]
-    initial = nnls(design, mixture)[0]
-    initial = initial / initial.sum() if initial.sum() else np.full(reference.shape[0], 1 / reference.shape[0])
+    initial_raw = nnls(design, mixture)[0]
+    raw_sum = initial_raw.sum()
+    if raw_sum:
+        initial = initial_raw / raw_sum
+    else:
+        initial = np.full(reference.shape[0], 1 / reference.shape[0])
+    # Short-circuit: if NNLS already satisfies the closure constraint (sum ≈ 1),
+    # skip the constrained optimizer to avoid introducing numerical noise.
+    if abs(raw_sum - 1.0) < 1e-8:
+        return initial
+    # Precompute gram matrix and rhs for analytical gradient/Hessian.
+    # SLSQP fails with "positive directional derivative" when the initial
+    # point sits at an active lower bound (coefficient = 0 for some component).
+    # trust-constr with an exact constant Hessian (QP) is reliable in that case.
+    gram = design.T @ design       # (n_refs, n_refs) — exact Hessian / 2
+    rhs = design.T @ mixture       # (n_refs,)
+    hess = 2.0 * gram
+
+    def _obj(x: np.ndarray) -> float:
+        r = design @ x - mixture
+        return float(r @ r)
+
+    def _grad(x: np.ndarray) -> np.ndarray:
+        return 2.0 * (gram @ x - rhs)
+
+    n = reference.shape[0]
     result = minimize(
-        lambda coefficients: float(np.sum((design @ coefficients - mixture) ** 2)), initial,
-        method="SLSQP", bounds=[(0.0, None)] * reference.shape[0],
-        constraints={"type": "eq", "fun": lambda coefficients: float(coefficients.sum() - 1.0)},
+        _obj, initial,
+        jac=_grad,
+        hess=lambda x: hess,
+        method="trust-constr",
+        bounds=[(0.0, np.inf)] * n,
+        constraints={"type": "eq", "fun": lambda x: float(x.sum() - 1.0),
+                     "jac": lambda x: np.ones(n)},
+        options={"maxiter": 10_000, "gtol": 1e-12},
     )
     if not result.success:
         raise ValueError(f"sum-to-one constrained fit failed: {result.message}")
