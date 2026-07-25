@@ -1328,6 +1328,36 @@ class ProjectRunService:
             model.append(
                 "Nested preparation-group evaluation was run over the approved bounded pipeline families."
             )
+        if task_type in {"pca", "unsupervised_exploration"}:
+            pca = result.get("pca")
+            if pca and pca.get("explained_variance_ratio"):
+                evr = pca["explained_variance_ratio"]
+                cumulative = sum(evr)
+                parts = ", ".join(
+                    f"PC{i + 1} explains {v * 100:.1f}% of variance"
+                    for i, v in enumerate(evr)
+                )
+                observed.append(
+                    f"{parts} ({cumulative * 100:.1f}% cumulative across {len(evr)} component{'s' if len(evr) != 1 else ''})."
+                )
+        if task_type in {"mixture", "mixture_quantification"}:
+            ms = result.get("mixture_screening")
+            if ms:
+                ref_names = ms.get("provenance", {}).get("reference_names") or []
+                mix_ids = ms.get("mixture_measurement_ids", [])
+                coefficients = ms.get("coefficients", [])
+                rmse_list = ms.get("rmse", [])
+                closure_list = ms.get("closure_error", [])
+                for i, (coeffs, mid) in enumerate(zip(coefficients, mix_ids)):
+                    parts = ", ".join(
+                        f"{name}: {c * 100:.1f}%"
+                        for name, c in zip(ref_names, coeffs)
+                    )
+                    rmse_str = f"{rmse_list[i]:.4g}" if i < len(rmse_list) else "n/a"
+                    closure_str = f"{closure_list[i]:.4g}" if i < len(closure_list) else "n/a"
+                    observed.append(
+                        f"Sample {mid}: constrained coefficients — {parts}; RMSE={rmse_str}, closure_error={closure_str}."
+                    )
         limitations = [
             item.get("message", str(item))
             for item in _issues(result.get("issues", ()))

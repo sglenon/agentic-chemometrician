@@ -107,7 +107,11 @@ def run_ftir_nir_task(measurements: Sequence[Mapping[str, Any]], task_type: str 
             result["issues"].append(_issue("pca_requires_three_spectra", "Descriptive PCA requires at least three aligned spectra."))
         else:
             axes = [item["axis"] for item in prepared]
-            if not all(axis == axes[0] for axis in axes[1:]):
+            _ref_ax = np.asarray(axes[0])
+            if not all(
+                len(ax) == len(axes[0]) and np.allclose(np.asarray(ax), _ref_ax, rtol=0.0, atol=1e-6)
+                for ax in axes[1:]
+            ):
                 result["issues"].append(_issue("pca_alignment_required", "PCA requires explicitly aligned spectra.", "advisory"))
             else:
                 n_components = min(2, len(prepared), len(axes[0]))
@@ -130,7 +134,12 @@ def run_ftir_nir_task(measurements: Sequence[Mapping[str, Any]], task_type: str 
         mixtures = [item for item in prepared if item not in references]
         if not references or not mixtures:
             result["issues"].append(_issue("explicit_references_required", "Mixture screening requires explicit reference roles and reference_name values."))
-        elif not all(item["axis"] == references[0]["axis"] for item in references + mixtures):
+        elif not all(
+            len(item["axis"]) == len(references[0]["axis"]) and np.allclose(
+                np.asarray(item["axis"]), np.asarray(references[0]["axis"]), rtol=0.0, atol=1e-6
+            )
+            for item in references + mixtures
+        ):
             result["issues"].append(_issue("mixture_alignment_required", "Mixture screening requires explicitly aligned axes."))
         elif not all(
             (item["signal_kind"], item["signal_unit"])
