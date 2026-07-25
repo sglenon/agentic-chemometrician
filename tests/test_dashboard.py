@@ -389,3 +389,121 @@ def test_modality_specific_dashboard_exports(
         assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
         if path.suffix == ".svg":
             ElementTree.parse(path)
+
+
+def _make_store_and_run(tmp_path: Path) -> tuple[ProjectStore, dict]:
+    store = ProjectStore(tmp_path)
+    run = {
+        "project_id": "project",
+        "run_id": "test-run",
+        "manifest_hash": "a" * 64,
+        "plan_hash": "b" * 64,
+        "artifacts": [],
+    }
+    return store, run
+
+
+def test_residuals_figure_rendered_for_regression_evaluation(
+    tmp_path: Path,
+) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "evaluation": {
+            "predictions": [
+                {"sample_id": "s1", "group": "g1", "fold": 0, "y_true": 3.0, "y_pred": 2.8},
+                {"sample_id": "s2", "group": "g2", "fold": 1, "y_true": 5.0, "y_pred": 5.4},
+            ],
+            "selected_configs": [],
+        }
+    }
+    artifacts, _, figures = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/residuals.svg" in actual_paths
+    assert "figures/predicted-vs-observed.svg" in actual_paths
+    # SVG must parse and contain zero-hline dashes
+    residuals_svg = store.path_for("runs/test-run/figures/residuals.svg").read_text("utf-8")
+    ElementTree.fromstring(residuals_svg)
+    assert "stroke-dasharray" in residuals_svg
+    figure_labels = [label for label, _ in figures]
+    assert "Residuals" in figure_labels
+
+
+def test_confusion_matrix_figure_rendered_for_classification_evaluation(
+    tmp_path: Path,
+) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "evaluation": {
+            "predictions": [
+                {"sample_id": "s1", "group": "g1", "fold": 0, "y_true": "cat", "y_pred": "cat"},
+                {"sample_id": "s2", "group": "g1", "fold": 0, "y_true": "dog", "y_pred": "cat"},
+                {"sample_id": "s3", "group": "g2", "fold": 1, "y_true": "cat", "y_pred": "dog"},
+                {"sample_id": "s4", "group": "g2", "fold": 1, "y_true": "dog", "y_pred": "dog"},
+            ],
+            "selected_configs": [],
+        }
+    }
+    artifacts, _, figures = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/confusion-matrix.svg" in actual_paths
+    # Residuals must NOT appear for classification
+    assert "figures/residuals.svg" not in actual_paths
+    svg = store.path_for("runs/test-run/figures/confusion-matrix.svg").read_text("utf-8")
+    ElementTree.fromstring(svg)
+    assert "cat" in svg
+    assert "dog" in svg
+    figure_labels = [label for label, _ in figures]
+    assert "Confusion Matrix" in figure_labels
+
+
+def test_no_residuals_or_confusion_when_evaluation_absent(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result: dict = {"pca": {"scores": [[-1.0, 0.2], [0.1, -0.3]]}}
+    artifacts, _, _ = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/residuals.svg" not in actual_paths
+    assert "figures/confusion-matrix.svg" not in actual_paths
+
+
+def test_regression_evaluation_does_not_produce_confusion_matrix(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "evaluation": {
+            "predictions": [
+                {"sample_id": "s1", "group": "g1", "fold": 0, "y_true": 1.0, "y_pred": 1.1},
+                {"sample_id": "s2", "group": "g2", "fold": 1, "y_true": 2.0, "y_pred": 1.8},
+            ],
+            "selected_configs": [],
+        }
+    }
+    artifacts, _, _ = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/confusion-matrix.svg" not in actual_paths
+    assert "figures/residuals.svg" in actual_paths
+
+
+def test_classification_evaluation_does_not_produce_residuals(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "evaluation": {
+            "predictions": [
+                {"sample_id": "s1", "group": "g1", "fold": 0, "y_true": "A", "y_pred": "B"},
+                {"sample_id": "s2", "group": "g2", "fold": 1, "y_true": "B", "y_pred": "B"},
+            ],
+            "selected_configs": [],
+        }
+    }
+    artifacts, _, _ = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/residuals.svg" not in actual_paths
+    assert "figures/confusion-matrix.svg" in actual_paths

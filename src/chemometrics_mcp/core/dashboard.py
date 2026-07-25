@@ -257,6 +257,7 @@ def _scatter_svg(
     x_label: str,
     y_label: str,
     identity_line: bool = False,
+    zero_hline: bool = False,
 ) -> str | None:
     prepared = []
     for point in points:
@@ -281,6 +282,9 @@ def _scatter_svg(
         shared_min, shared_max = min(x_min, y_min), max(x_max, y_max)
         x_min = y_min = shared_min
         x_max = y_max = shared_max
+    if zero_hline:
+        y_min = min(y_min, 0.0)
+        y_max = max(y_max, 0.0)
     x_padding = (x_max - x_min) * 0.07 or 1
     y_padding = (y_max - y_min) * 0.07 or 1
     x_min, x_max = x_min - x_padding, x_max + x_padding
@@ -322,6 +326,11 @@ def _scatter_svg(
         low, high = max(x_min, y_min), min(x_max, y_max)
         parts.append(
             f'<line x1="{sx(low):.2f}" y1="{sy(low):.2f}" x2="{sx(high):.2f}" y2="{sy(high):.2f}" '
+            'stroke="#6b7280" stroke-width="1.5" stroke-dasharray="6 5"/>'
+        )
+    if zero_hline:
+        parts.append(
+            f'<line x1="{left:.2f}" y1="{sy(0.0):.2f}" x2="{left + plot_w:.2f}" y2="{sy(0.0):.2f}" '
             'stroke="#6b7280" stroke-width="1.5" stroke-dasharray="6 5"/>'
         )
     groups = {item[3] for item in prepared}
@@ -402,6 +411,105 @@ def _bar_svg(
                 f'font-family="system-ui,sans-serif" font-size="12" fill="#111827">{xml_escape(_fmt(value))}</text>',
             ]
         )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _confusion_matrix_svg(
+    classes: Sequence[str],
+    matrix: Sequence[Sequence[int]],
+    *,
+    title: str,
+) -> str | None:
+    n = len(classes)
+    if n == 0:
+        return None
+    cell = min(80, max(36, 360 // n))
+    max_label_len = max((len(c) for c in classes), default=4)
+    label_w = min(130, max(64, max_label_len * 8))
+    top = 55
+    left = label_w
+    right_pad = 30
+    bottom_pad = min(130, max(64, max_label_len * 7)) + 30
+    width = left + n * cell + right_pad
+    height = top + n * cell + bottom_pad
+
+    max_count = max(
+        (matrix[r][c] for r in range(n) for c in range(n)), default=1
+    ) or 1
+
+    id_token = hashlib.sha256(title.encode("utf-8")).hexdigest()[:10]
+    title_id = f"title-{id_token}"
+    desc_id = f"desc-{id_token}"
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img" aria-labelledby="{title_id} {desc_id}">',
+        f'<title id="{title_id}">{xml_escape(title)}</title>',
+        f'<desc id="{desc_id}">Confusion matrix with {n} classes.</desc>',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="{left}" y="30" font-family="system-ui,sans-serif" font-size="20" '
+        f'font-weight="600" fill="#111827">{xml_escape(title)}</text>',
+    ]
+
+    for r in range(n):
+        for c in range(n):
+            count = matrix[r][c]
+            intensity = count / max_count
+            # White (#fff) → accent blue (#2563eb = 37,99,235)
+            rv = int(255 - intensity * (255 - 37))
+            gv = int(255 - intensity * (255 - 99))
+            bv = int(255 - intensity * (255 - 235))
+            fill = f"rgb({rv},{gv},{bv})"
+            text_color = "#ffffff" if intensity > 0.55 else "#111827"
+            cx = left + c * cell
+            cy = top + r * cell
+            font_size = min(14, max(9, cell // 4))
+            parts.extend(
+                [
+                    f'<rect x="{cx}" y="{cy}" width="{cell}" height="{cell}" '
+                    f'fill="{fill}" stroke="#e5e7eb" stroke-width="1"/>',
+                    f'<text x="{cx + cell // 2}" y="{cy + cell // 2 + font_size // 3}" '
+                    f'text-anchor="middle" font-family="system-ui,sans-serif" '
+                    f'font-size="{font_size}" fill="{text_color}">{count}</text>',
+                ]
+            )
+
+    for r, cls in enumerate(classes):
+        cy = top + r * cell + cell // 2
+        shown = cls if len(cls) <= 16 else cls[:13] + "…"
+        parts.append(
+            f'<text x="{left - 8}" y="{cy + 4}" text-anchor="end" '
+            f'font-family="system-ui,sans-serif" font-size="12" fill="#374151">'
+            f"{xml_escape(shown)}</text>"
+        )
+
+    for c, cls in enumerate(classes):
+        cx = left + c * cell + cell // 2
+        cy_base = top + n * cell + 8
+        shown = cls if len(cls) <= 16 else cls[:13] + "…"
+        parts.append(
+            f'<text transform="rotate(45,{cx},{cy_base})" x="{cx}" y="{cy_base}" '
+            f'text-anchor="start" font-family="system-ui,sans-serif" '
+            f'font-size="12" fill="#374151">{xml_escape(shown)}</text>'
+        )
+
+    y_label_x = max(14, label_w // 4)
+    y_mid = top + n * cell // 2
+    parts.append(
+        f'<text transform="rotate(-90,{y_label_x},{y_mid})" x="{y_label_x}" y="{y_mid}" '
+        f'text-anchor="middle" font-family="system-ui,sans-serif" '
+        f'font-size="14" fill="#111827">True label</text>'
+    )
+
+    x_mid = left + n * cell // 2
+    x_label_y = height - 8
+    parts.append(
+        f'<text x="{x_mid}" y="{x_label_y}" text-anchor="middle" '
+        f'font-family="system-ui,sans-serif" font-size="14" fill="#111827">'
+        f"Predicted label</text>"
+    )
+
     parts.append("</svg>")
     return "".join(parts)
 
@@ -656,6 +764,52 @@ def _task_tables_and_figures(
             ),
             "Held-out predicted versus observed",
         )
+        # Residual figure (regression only — numeric_points already validated)
+        if numeric_points:
+            residual_points = [
+                {
+                    "x": pt["y"],  # predicted on x-axis matches existing plot
+                    "y": pt["x"] - pt["y"],  # true − predicted
+                    "label": pt["label"],
+                    "group": pt["group"],
+                }
+                for pt in numeric_points
+            ]
+            figure(
+                "residuals.svg",
+                _scatter_svg(
+                    residual_points,
+                    title="Residuals",
+                    x_label="Predicted",
+                    y_label="Residual (true − predicted)",
+                    zero_hline=True,
+                ),
+                "Residuals",
+            )
+        # Confusion matrix (classification only — predictions present but not numeric)
+        elif predictions:
+            cls_labels = sorted(
+                {str(row["y_true"]) for row in predictions if "y_true" in row}
+                | {str(row["y_pred"]) for row in predictions if "y_pred" in row}
+            )
+            if cls_labels:
+                idx = {label: i for i, label in enumerate(cls_labels)}
+                n_cls = len(cls_labels)
+                cm: list[list[int]] = [[0] * n_cls for _ in range(n_cls)]
+                for row in predictions:
+                    try:
+                        r = idx[str(row["y_true"])]
+                        c = idx[str(row["y_pred"])]
+                        cm[r][c] += 1
+                    except (KeyError, TypeError):
+                        pass
+                figure(
+                    "confusion-matrix.svg",
+                    _confusion_matrix_svg(
+                        cls_labels, cm, title="Confusion Matrix"
+                    ),
+                    "Confusion Matrix",
+                )
 
     job_evidence = task_result.get("evidence")
     if isinstance(job_evidence, Mapping):
