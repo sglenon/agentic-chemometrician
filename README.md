@@ -20,7 +20,11 @@ ordinary scientific language.
 
 Create one folder containing the files that belong to the study. It can contain
 CSV, TXT, ASC, XY, Excel, or JCAMP files, and the files do not need to be
-perfectly named.
+perfectly named. Single-column Y-only `.asc` files that carry JCAMP-style
+`##KEY=VALUE` headers (`FIRSTX`, `LASTX`, `DELTAX`, `NPOINTS`, with optional
+`XFACTOR`/`YFACTOR` scaling) are supported — the wavenumber axis is
+reconstructed from the headers automatically. Files that lack the required
+geometry headers are rejected cleanly rather than assigned a fabricated index axis.
 
 For example:
 
@@ -216,6 +220,22 @@ These questions prevent scientifically unsafe guessing. If you do not know an
 answer, say so; the MCP will narrow the analysis or explain what evidence is
 missing.
 
+To pre-answer role and composition questions, place a `manifest_hints.json`
+file in the same source folder before calling `create_project`. The schema is:
+
+```json
+{
+  "<filename-stem-or-glob>": {
+    "role": "reference|sample|calibration",
+    "reference_name": "Compound A",
+    "composition": {"ComponentA": 1.0}
+  }
+}
+```
+
+When the file is present it is applied automatically before the manifest hash
+is computed. Absent file leaves today's behavior unchanged.
+
 ### 5. Approve the analysis plan
 
 Before computation, the agent presents a compact plan containing the proposed
@@ -269,9 +289,17 @@ chemometrics-output/
 
 Task-specific outputs—such as PCA scores, held-out predictions, Job’s-plot
 responses, matched PXRD/MS peaks, or mixture-screening coefficients—are added
-when supported by the approved analysis. The HTML dashboard is self-contained,
-works offline, and only renders persisted evidence; opening it does not rerun
-the analysis.
+when supported by the approved analysis. Dashboard figures include PCA scores
+scatter, scree plot, and loadings; a per-wavelength F-statistic/ANOVA
+discrimination plot when two or more labeled sample groups exist; residuals
+(regression tasks) and confusion matrix (classification tasks). An opt-in
+`consensus` task option additionally produces a per-estimator leaderboard and
+feature-importance comparison across all candidate models; mixture quantification
+always produces a pipeline-comparison figure (`mixture-consensus.svg`) comparing
+`constrained-nnls` and `pls2-compositional`. Figures are silently skipped when
+the corresponding data are absent — no error is raised. The HTML dashboard is
+self-contained, works offline, and only renders persisted evidence; opening it
+does not rerun the analysis.
 
 When you want a notebook as well, say:
 
@@ -330,12 +358,13 @@ The MCP exposes one scientist-facing project workflow:
 | `create_project` | Inventory a local folder, hash inputs, parse supported files, and draft a manifest |
 | `get_project` | Return compact manifest/readiness status |
 | `update_project_manifest` | Record explicit modality, units, roles, preparation hierarchy, and metadata |
-| `plan_project_analysis` | Produce a bounded, hash-stable task and pipeline plan |
+| `plan_project_analysis` | Produce a bounded, hash-stable task and pipeline plan; pass `task_kinds` (e.g. `["unsupervised_exploration", "mixture_quantification"]`) to run multiple analyses in one composite run |
 | `approve_project_plan` | Bind scientist approval to the exact stored plan hash |
 | `run_project_analysis` | Execute the approved plan and persist run-local evidence |
 | `get_project_run` | Return compact terminal status and issues |
 | `generate_project_report` | Validate evidence and return the report, offline dashboard, figures, tables, and optional notebook |
 | `list_chemometrics_capabilities` | Describe supported task packs, inputs, metrics, and claim ceilings |
+| `preprocess_spectra` | Apply preprocessing steps to spectra outside the project workflow — no manifest or approval ceremony required; returns before/after signals and inline SVG figures |
 
 ## Scientific scope
 
