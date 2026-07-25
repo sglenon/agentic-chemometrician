@@ -163,14 +163,26 @@ def generate_evidence_report(run: Mapping[str, Any], project_root: str | Path) -
     limitations = list(run.get("blockers", ())) + list(run.get("limitations", ()))
     counts = run.get("counts", {})
     recommendations = list(run.get("next_experiments", ())) or ["Collect independent preparations with documented validation design."]
+    # Per-task claim eligibility — present only for composite (schema_version "3") runs.
+    per_task_claim = run.get("per_task_claim_eligibility", ())
+    per_task_lines: list[str] = []
+    if per_task_claim:
+        per_task_lines = ["", "## Per-task claim eligibility"]
+        for entry in per_task_claim:
+            per_task_lines.append(
+                f"- {entry.get('task_type', '?')}: level={entry.get('claim_level', 'descriptive')}, eligible={entry.get('eligible', False)}"
+            )
+
     lines = [f"# Scientific report: {run['run_id']}", "", "## Observed spectral evidence", *(f"- {_text(item)}" for item in observed or ["No observed spectral evidence supplied."]),
              "", "## Model evidence", *(f"- {_text(item)}" for item in model or ["No model evidence supplied."]), "", "## Tentative explanations", *(f"- {_text(item)}" for item in tentative or ["None supplied; no chemical identity or purity conclusion is made."]),
              "", "## Unsupported claims", *(f"- {_text(item)}" for item in unsupported or ["None listed."]), "", "## Blockers and limitations", *(f"- {_text(item)}" for item in limitations or ["None listed."]),
              "", "## Study counts", f"- scans: {counts.get('scan_count', 'not declared')}", f"- independent preparations: {counts.get('preparation_count', 'not declared')}",
-             "", "## Claim eligibility", f"- level: {eligibility.get('claim_level', 'descriptive')}", f"- eligible: {eligibility.get('eligible', False)}", "", "## Next experiment", *(f"- {_text(item)}" for item in recommendations)]
+             "", "## Claim eligibility", f"- level: {eligibility.get('claim_level', 'descriptive')}", f"- eligible: {eligibility.get('eligible', False)}",
+             *per_task_lines,
+             "", "## Next experiment", *(f"- {_text(item)}" for item in recommendations)]
     return {"project_id": run["project_id"], "run_id": run["run_id"], "manifest_hash": run["manifest_hash"], "plan_hash": run["plan_hash"],
             "markdown": "\n".join(lines), "evidence_ledger": ledger,
-            "machine_summary": {"claim_eligibility": eligibility, "scan_count": counts.get("scan_count"), "preparation_count": counts.get("preparation_count"), "limitations": limitations, "recommendations": recommendations}}
+            "machine_summary": {"claim_eligibility": eligibility, "per_task_claim_eligibility": list(per_task_claim), "scan_count": counts.get("scan_count"), "preparation_count": counts.get("preparation_count"), "limitations": limitations, "recommendations": recommendations}}
 
 
 def persist_evidence_report(store: ProjectStore, report: Mapping[str, Any], name: str = "evidence-report") -> str:

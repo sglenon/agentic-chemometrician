@@ -198,28 +198,98 @@ class ProjectRunService:
                 return self._terminal(base, "blocked", blockers)
 
             measurements = self._materialize(manifest)
-            task = plan.task or (plan.tasks[0] if plan.tasks else None)
-            if task is None:
+
+            # Collect the ordered list of tasks to execute.  The contract has
+            # both plan.task (singular, backward-compat) and plan.tasks (tuple).
+            # For composite plans, plan.tasks has >1 element.
+            tasks_to_run = list(plan.tasks) if plan.tasks else (
+                [plan.task] if plan.task else []
+            )
+            if not tasks_to_run:
                 return self._terminal(
                     base,
                     "blocked",
                     [_blocker("missing_task", "Plan has no executable task.")],
                 )
 
-            task_result = self._execute(
-                task.task_type,
-                measurements,
-                target=task.target,
-                pipeline_families=[
+            is_composite = len(tasks_to_run) > 1
+
+            # Execute each task and merge results.
+            #
+            # Multiple task packs that share the same underlying implementation
+            # (e.g. both unsupervised_exploration and mixture_quantification call
+            # run_ftir_nir_task) will produce a set of shared metadata keys that
+            # are identical from both calls because they operate on the same
+            # measurements.  These are safe to overwrite with the last task's
+            # value.  Only the TASK-SPECIFIC SCIENTIFIC RESULT KEYS (pca,
+            # mixture_screening, evaluation, etc.) must never collide — two
+            # tasks producing the same named scientific result would indicate a
+            # bug in task-pack key namespacing and must fail loudly.
+            _SHARED_METADATA_KEYS: frozenset[str] = frozenset({
+                "task_pack",
+                "version",
+                "task_type",
+                "claim_ceiling",
+                "measurement_provenance",
+                "counts",
+                "evidence_rows",
+                "issues",
+                # supervised path shares these
+                "split_id",
+                "target",
+                "signal_semantics",
+            })
+            per_task_results: list[tuple[Any, dict[str, Any]]] = []
+            task_result: dict[str, Any] = {}
+            for task in tasks_to_run:
+                # Filter pipeline families to those namespaced for this task kind.
+                task_pipeline_families = [
                     item.model_family
                     for item in plan.pipelines
                     if item.model_family
-                ],
-                task_options=dict(
-                    task.metadata.get("analysis_options", {})
-                ),
-                split_manifest=plan.split_manifest,
-            )
+                    and item.pipeline_id.startswith(f"{task.task_type}:")
+                ]
+                # Fallback: if no kind-namespaced pipelines found (e.g. legacy
+                # single-task plan without kind prefix), use all families.
+                if not task_pipeline_families:
+                    task_pipeline_families = [
+                        item.model_family
+                        for item in plan.pipelines
+                        if item.model_family
+                    ]
+                single_result = self._execute(
+                    task.task_type,
+                    measurements,
+                    target=task.target,
+                    pipeline_families=task_pipeline_families,
+                    task_options=dict(
+                        task.metadata.get("analysis_options", {})
+                    ),
+                    split_manifest=plan.split_manifest,
+                )
+                per_task_results.append((task, single_result))
+
+                # Collision check: only on task-specific scientific result keys.
+                # Shared metadata keys (task_pack, counts, etc.) are safe to
+                # overwrite — both tasks produce identical values for them.
+                scientific_collisions = (
+                    set(task_result.keys()) & set(single_result.keys())
+                ) - _SHARED_METADATA_KEYS
+                if scientific_collisions:
+                    raise RuntimeError(
+                        f"Task-specific scientific result key collision detected "
+                        f"between tasks: {sorted(scientific_collisions)}. "
+                        f"Each task pack must write to distinct scientific result "
+                        f"keys (pca, mixture_screening, evaluation, etc.)."
+                    )
+                # Merge: concatenate issues, union all other keys (last task wins
+                # for shared metadata keys, distinct scientific keys accumulate).
+                merged_issues = list(task_result.pop("issues", [])) + list(
+                    single_result.get("issues", [])
+                )
+                task_result.update(single_result)
+                task_result["issues"] = merged_issues
+
             result_issues = _issues(task_result.get("issues", ()))
             if (
                 isinstance(task_result.get("evaluation"), Mapping)
@@ -249,46 +319,69 @@ class ProjectRunService:
                     else None
                 ),
             }
-            planned_claim = str(
-                task.metadata.get("planned_claim_level", "descriptive")
+
+            # Compute per-task claim eligibility.  Single-task plans produce one
+            # entry; composite plans produce one entry per executed task.
+            per_task_claim: list[dict[str, Any]] = []
+            for task, single_result in per_task_results:
+                planned_claim = str(
+                    task.metadata.get("planned_claim_level", "descriptive")
+                )
+                try:
+                    requested_claim = ClaimLevel(planned_claim).value
+                except ValueError:
+                    requested_claim = ClaimLevel.DESCRIPTIVE.value
+                task_issues = _issues(single_result.get("issues", ()))
+                task_gate = evaluate_claim_eligibility(
+                    requested_claim,
+                    issues=tuple(
+                        GateIssue(
+                            code=str(item.get("code", "execution_issue")),
+                            message=str(item.get("message", "Execution issue.")),
+                            level=(
+                                str(item.get("level"))
+                                if str(item.get("level"))
+                                in {"blocker", "advisory", "information"}
+                                else "advisory"
+                            ),
+                            stage=str(item.get("stage", "execution")),
+                            details=dict(item.get("details", {})),
+                        )
+                        for item in task_issues
+                    ),
+                    design_metadata={
+                        "independent_preparations": counts["preparation_count"] or 0,
+                        "group_safe_validation": task.task_type
+                        in {"classification", "regression"},
+                        "fold_safe_pipeline": task.task_type
+                        in {"classification", "regression"},
+                        "calibration_coverage": False,
+                    },
+                )
+                per_task_claim.append({
+                    "task_id": task.task_id,
+                    "task_type": task.task_type,
+                    "claim_level": task_gate.claim_level,
+                    "eligible": task_gate.can_execute and not _has_blocker(task_issues),
+                    "reasons": [item.message for item in task_gate.issues],
+                })
+
+            # Overall claim eligibility = most conservative across all tasks.
+            claim_level_order = [level.value for level in ClaimLevel]
+            min_claim = min(
+                per_task_claim,
+                key=lambda e: claim_level_order.index(e["claim_level"])
+                if e["claim_level"] in claim_level_order
+                else 0,
             )
-            try:
-                requested_claim = ClaimLevel(planned_claim).value
-            except ValueError:
-                requested_claim = ClaimLevel.DESCRIPTIVE.value
-            gate = evaluate_claim_eligibility(
-                requested_claim,
-                issues=tuple(
-                    GateIssue(
-                        code=str(item.get("code", "execution_issue")),
-                        message=str(item.get("message", "Execution issue.")),
-                        level=(
-                            str(item.get("level"))
-                            if str(item.get("level"))
-                            in {"blocker", "advisory", "information"}
-                            else "advisory"
-                        ),
-                        stage=str(item.get("stage", "execution")),
-                        details=dict(item.get("details", {})),
-                    )
-                    for item in result_issues
-                ),
-                design_metadata={
-                    "independent_preparations": counts[
-                        "preparation_count"
-                    ]
-                    or 0,
-                    "group_safe_validation": task.task_type
-                    in {"classification", "regression"},
-                    "fold_safe_pipeline": task.task_type
-                    in {"classification", "regression"},
-                    # Coverage must be established by an explicit calibration
-                    # design; successful fitting alone never implies it.
-                    "calibration_coverage": False,
-                },
-            )
+            overall_gate_claim_level = min_claim["claim_level"]
+            overall_eligible = all(e["eligible"] for e in per_task_claim)
+
+            # Use the first task for backward-compat single-task fields.
+            primary_task = tasks_to_run[0]
+
             detection = evaluate_detection_limit_eligibility(
-                task.metadata.get("detection_limit_design", {})
+                primary_task.metadata.get("detection_limit_design", {})
             )
             environment = {
                 "python": sys.version.split()[0],
@@ -296,12 +389,16 @@ class ProjectRunService:
                 "package_version": _package_version(),
             }
             environment["environment_hash"] = data_hash(environment)
-            evidence = {
-                "schema_version": "2",
+
+            # Schema version: "2" for single-task (byte-compatible), "3" for composite.
+            schema_version = "3" if is_composite else "2"
+            evidence: dict[str, Any] = {
+                "schema_version": schema_version,
                 "project_id": manifest.project_id,
                 "run_id": run_id,
-                "task_id": task.task_id,
-                "task_type": task.task_type,
+                # Backward-compat single fields (first/only task).
+                "task_id": primary_task.task_id,
+                "task_type": primary_task.task_type,
                 "manifest_hash": manifest.manifest_hash,
                 "plan_hash": plan.plan_hash,
                 "pipeline_ids": [
@@ -316,9 +413,9 @@ class ProjectRunService:
                 "task_result": _json(task_result),
                 "issues": result_issues,
                 "claim_eligibility": {
-                    "claim_level": gate.claim_level,
-                    "eligible": gate.can_execute and not _has_blocker(result_issues),
-                    "reasons": [item.message for item in gate.issues],
+                    "claim_level": overall_gate_claim_level,
+                    "eligible": overall_eligible and not _has_blocker(result_issues),
+                    "reasons": [r for e in per_task_claim for r in e.get("reasons", [])],
                 },
                 "detection_limit_eligibility": detection.as_dict(),
                 "data_hashes": {
@@ -332,6 +429,11 @@ class ProjectRunService:
                 },
                 "environment": environment,
             }
+            # Composite-only fields (not present for single-task to stay byte-compatible).
+            if is_composite:
+                evidence["task_types"] = [t.task_type for t in tasks_to_run]
+                evidence["per_task_claim_eligibility"] = per_task_claim
+
             evidence_path = f"runs/{run_id}/evidence.json"
             written = self.store.write_json(evidence_path, evidence)
             artifact = {
@@ -343,18 +445,32 @@ class ProjectRunService:
                 "manifest_hash": manifest.manifest_hash,
                 "plan_hash": plan.plan_hash,
             }
-            base.update(
-                self._report_fields(
+
+            if is_composite:
+                # Composite: compute _report_fields per task using its own result slice,
+                # then merge into a unified report with per-task claim levels.
+                report = self._composite_report_fields(
+                    per_task_results,
+                    plan,
+                    counts,
+                    per_task_claim,
+                    detection.as_dict(),
+                    evidence_path,
+                )
+            else:
+                # Single-task: unchanged _report_fields call.
+                task = primary_task
+                report = self._report_fields(
                     task.task_id,
                     task.task_type,
                     task_result,
                     counts,
-                    gate.claim_level,
+                    overall_gate_claim_level,
                     detection.as_dict(),
                     evidence_path,
                     [item.pipeline_id for item in plan.pipelines],
                 )
-            )
+            base.update(report)
             base["artifacts"] = [artifact]
             status = "blocked" if _has_blocker(result_issues) else "succeeded"
             return self._terminal(base, status, result_issues)
@@ -1012,6 +1128,89 @@ class ProjectRunService:
                 f"Approved pipeline families are unsupported: {sorted(requested)}"
             )
         return tuple(candidates)
+
+    @staticmethod
+    def _composite_report_fields(
+        per_task_results: list[tuple[Any, dict[str, Any]]],
+        plan: Any,
+        counts: Mapping[str, Any],
+        per_task_claim: list[dict[str, Any]],
+        detection: Mapping[str, Any],
+        evidence_path: str,
+    ) -> dict[str, Any]:
+        """Merge per-task _report_fields results into one composite report dict."""
+        merged: dict[str, Any] = {
+            "counts": dict(counts),
+            "detection_limit_eligibility": dict(detection),
+            "observed_spectral_evidence": [],
+            "model_evidence": [],
+            "tentative_explanations": [],
+            "unsupported_claims": [],
+            "blockers": [],
+            "limitations": [],
+            "next_experiments": [],
+            "findings": [],
+            "results": [],
+        }
+        # Overall claim eligibility: most conservative across tasks.
+        claim_level_order = [level.value for level in ClaimLevel]
+        min_entry = min(
+            per_task_claim,
+            key=lambda e: claim_level_order.index(e["claim_level"])
+            if e["claim_level"] in claim_level_order
+            else 0,
+        )
+        merged["claim_eligibility"] = {
+            "claim_level": min_entry["claim_level"],
+            "eligible": all(e["eligible"] for e in per_task_claim),
+        }
+        # Per-task breakdown for scientist-facing report.
+        merged["per_task_claim_eligibility"] = per_task_claim
+
+        seen_unsupported: set[str] = set()
+        seen_next: set[str] = set()
+
+        for (task, single_result), task_claim in zip(per_task_results, per_task_claim):
+            # Collect pipeline ids for this task by kind prefix.
+            task_pipeline_ids = [
+                item.pipeline_id for item in plan.pipelines
+                if item.pipeline_id.startswith(f"{task.task_type}:")
+            ]
+            if not task_pipeline_ids:
+                task_pipeline_ids = [item.pipeline_id for item in plan.pipelines]
+
+            single = ProjectRunService._report_fields(
+                task.task_id,
+                task.task_type,
+                single_result,
+                counts,
+                task_claim["claim_level"],
+                detection,
+                evidence_path,
+                task_pipeline_ids,
+            )
+            merged["observed_spectral_evidence"].extend(
+                single.get("observed_spectral_evidence", [])
+            )
+            merged["model_evidence"].extend(single.get("model_evidence", []))
+            merged["tentative_explanations"].extend(
+                single.get("tentative_explanations", [])
+            )
+            # Deduplicate unsupported_claims and next_experiments across tasks.
+            for item in single.get("unsupported_claims", []):
+                if item not in seen_unsupported:
+                    seen_unsupported.add(item)
+                    merged["unsupported_claims"].append(item)
+            merged["blockers"].extend(single.get("blockers", []))
+            merged["limitations"].extend(single.get("limitations", []))
+            for item in single.get("next_experiments", []):
+                if item not in seen_next:
+                    seen_next.add(item)
+                    merged["next_experiments"].append(item)
+            merged["findings"].extend(single.get("findings", []))
+            merged["results"].extend(single.get("results", []))
+
+        return merged
 
     @staticmethod
     def _report_fields(

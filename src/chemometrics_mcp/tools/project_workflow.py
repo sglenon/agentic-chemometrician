@@ -87,6 +87,7 @@ def _save_plan(output_root: str, plan: Any) -> None:
 
 
 def plan_project_analysis(output_root: str, objective: str, task_kind: str | None = None,
+                          task_kinds: list[str] | None = None,
                           requested_claim_level: str = "exploratory", intended_use: str | None = None,
                           compute_budget: Mapping[str, Any] | None = None, target: str | None = None,
                           analysis_options: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -101,7 +102,7 @@ def plan_project_analysis(output_root: str, objective: str, task_kind: str | Non
     budget = compute_budget
     if isinstance(compute_budget, Mapping):
         budget = compute_budget.get("max_pipelines", compute_budget.get("pipeline_limit"))
-    plan = planner.build_analysis_plan(manifest, intent, task_kind=task_kind, compute_budget=budget)
+    plan = planner.build_analysis_plan(manifest, intent, task_kind=task_kind, compute_budget=budget, task_kinds=task_kinds)
     _save_plan(output_root, plan)
     payload = _json(plan)
     return _compact({

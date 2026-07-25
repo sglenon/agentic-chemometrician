@@ -32,6 +32,16 @@ class PlanProjectAnalysisRequest(_Request):
     output_root: str = Field(min_length=1)
     objective: str = Field(min_length=1)
     task_kind: str | None = None
+    task_kinds: list[str] | None = Field(
+        default=None,
+        description=(
+            "Explicit list of task kinds for a composite plan (e.g. "
+            "['unsupervised_exploration', 'mixture_quantification']). "
+            "When provided, auto-routing via task_kind/objective keywords is "
+            "bypassed. At most one split-supervised kind (classification or "
+            "regression) is allowed per composite plan."
+        ),
+    )
     requested_claim_level: str = "exploratory"
     intended_use: str | None = None
     target: str | None = Field(default=None, min_length=1)
