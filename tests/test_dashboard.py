@@ -490,6 +490,136 @@ def test_regression_evaluation_does_not_produce_confusion_matrix(tmp_path: Path)
     assert "figures/residuals.svg" in actual_paths
 
 
+def test_pca_scree_figure_rendered_when_evr_present(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "pca": {
+            "scores": [[-1.0, 0.2], [0.1, -0.3], [0.9, 0.1]],
+            "explained_variance_ratio": [0.85, 0.10],
+        }
+    }
+    artifacts, _, figures = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/pca-scree.svg" in actual_paths
+    svg = store.path_for("runs/test-run/figures/pca-scree.svg").read_text("utf-8")
+    ElementTree.fromstring(svg)
+    assert "PC1" in svg
+    assert "Cumulative" in svg
+    figure_labels = [label for label, _ in figures]
+    assert "PCA scree plot" in figure_labels
+
+
+def test_pca_scree_skipped_when_evr_absent(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "pca": {
+            "scores": [[-1.0, 0.2], [0.1, -0.3], [0.9, 0.1]],
+            # no explained_variance_ratio
+        }
+    }
+    artifacts, _, _ = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/pca-scree.svg" not in actual_paths
+
+
+def test_pca_loadings_figure_rendered_when_components_and_axis_present(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "pca": {
+            "scores": [[-1.0, 0.2], [0.1, -0.3], [0.9, 0.1]],
+            "components": [[0.5, -0.3, 0.7, -0.4], [0.2, 0.8, -0.1, 0.5]],
+            "axis": [1000.0, 1001.0, 1002.0, 1003.0],
+        }
+    }
+    artifacts, _, figures = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/pca-loadings.svg" in actual_paths
+    svg = store.path_for("runs/test-run/figures/pca-loadings.svg").read_text("utf-8")
+    ElementTree.fromstring(svg)
+    assert "PC1" in svg
+    assert "PC2" in svg
+    figure_labels = [label for label, _ in figures]
+    assert "PCA component loadings" in figure_labels
+
+
+def test_pca_loadings_skipped_when_components_or_axis_absent(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    # No components
+    task_result = {"pca": {"scores": [[-1.0, 0.2]], "axis": [1000.0, 1001.0]}}
+    artifacts, _, _ = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/pca-loadings.svg" not in actual_paths
+
+
+def test_per_wavelength_fstat_rendered_with_two_groups(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    # 4 samples across 4 wavelengths; 2 groups: "sample" and "reference"
+    task_result = {
+        "pca": {
+            "scores": [[-1.0], [0.1], [0.9], [0.5]],
+            "signals": [
+                [0.1, 0.2, 0.3, 0.4],
+                [0.2, 0.3, 0.4, 0.5],
+                [0.9, 0.8, 0.7, 0.6],
+                [0.8, 0.7, 0.6, 0.5],
+            ],
+            "labels": ["sample", "sample", "reference", "reference"],
+            "axis": [1000.0, 1001.0, 1002.0, 1003.0],
+        }
+    }
+    artifacts, _, figures = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/per-wavelength-fstat.svg" in actual_paths
+    svg = store.path_for("runs/test-run/figures/per-wavelength-fstat.svg").read_text("utf-8")
+    ElementTree.fromstring(svg)
+    figure_labels = [label for label, _ in figures]
+    assert "Per-wavelength F-statistic" in figure_labels
+
+
+def test_per_wavelength_fstat_skipped_with_fewer_than_two_groups(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    # All samples same label → F-stat skipped
+    task_result = {
+        "pca": {
+            "scores": [[-1.0], [0.1], [0.9]],
+            "signals": [[0.1, 0.2], [0.2, 0.3], [0.9, 0.8]],
+            "labels": ["sample", "sample", "sample"],
+            "axis": [1000.0, 1001.0],
+        }
+    }
+    artifacts, _, _ = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/per-wavelength-fstat.svg" not in actual_paths
+
+
+def test_per_wavelength_fstat_skipped_when_signals_absent(tmp_path: Path) -> None:
+    store, run = _make_store_and_run(tmp_path)
+    task_result = {
+        "pca": {
+            "scores": [[-1.0], [0.1]],
+            "axis": [1000.0, 1001.0],
+            # no signals or labels
+        }
+    }
+    artifacts, _, _ = _task_tables_and_figures(
+        store, run, task_result, run_prefix="runs/test-run"
+    )
+    actual_paths = {str(Path(item["path"]).relative_to("runs/test-run")) for item in artifacts}
+    assert "figures/per-wavelength-fstat.svg" not in actual_paths
+
+
 def test_classification_evaluation_does_not_produce_residuals(tmp_path: Path) -> None:
     store, run = _make_store_and_run(tmp_path)
     task_result = {

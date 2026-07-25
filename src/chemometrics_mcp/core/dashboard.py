@@ -16,6 +16,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from xml.sax.saxutils import escape as xml_escape
 
 import numpy as np
+from scipy.stats import f_oneway
 
 from chemometrics_mcp.core.project_service import ProjectService
 from chemometrics_mcp.core.project_store import (
@@ -514,6 +515,126 @@ def _confusion_matrix_svg(
     return "".join(parts)
 
 
+def _scree_svg(explained_variance_ratio: Sequence[float], *, title: str) -> str | None:
+    """Vertical bar chart of per-component explained variance with cumulative line."""
+    evr = [float(v) for v in explained_variance_ratio if math.isfinite(float(v))]
+    if not evr:
+        return None
+    n = len(evr)
+    cumulative = [sum(evr[: i + 1]) for i in range(n)]
+    id_token = hashlib.sha256(title.encode("utf-8")).hexdigest()[:10]
+    title_id, desc_id = f"title-{id_token}", f"desc-{id_token}"
+    width, height = 900, 520
+    left, right, top, bottom = 75, 30, 55, 80
+    plot_w, plot_h = width - left - right, height - top - bottom
+    bar_gap = 6
+    bar_w = max(12, plot_w // n - bar_gap)
+    y_max = 1.0
+    y_min = 0.0
+
+    def sx(index: int) -> float:
+        step = plot_w / n
+        return left + index * step + step / 2
+
+    def sy(value: float) -> float:
+        return top + (1 - (value - y_min) / (y_max - y_min)) * plot_h
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img" aria-labelledby="{title_id} {desc_id}">',
+        f'<title id="{title_id}">{xml_escape(title)}</title>',
+        f'<desc id="{desc_id}">Scree plot with {n} components.</desc>',
+        '<rect width="100%" height="100%" fill="#ffffff"/>',
+        f'<text x="{left}" y="30" font-family="system-ui,sans-serif" font-size="20" '
+        f'font-weight="600" fill="#111827">{xml_escape(title)}</text>',
+    ]
+    # y-axis ticks
+    for tick in range(6):
+        ratio = tick / 5
+        yv = 1 - ratio
+        py = top + ratio * plot_h
+        parts.extend([
+            f'<line x1="{left}" y1="{py:.2f}" x2="{left + plot_w}" y2="{py:.2f}" stroke="#e5e7eb"/>',
+            f'<text x="{left - 10}" y="{py + 4:.2f}" text-anchor="end" '
+            f'font-family="system-ui,sans-serif" font-size="11" fill="#4b5563">{yv:.0%}</text>',
+        ])
+    # bars
+    for i, v in enumerate(evr):
+        x = sx(i) - bar_w / 2
+        bar_h = v * plot_h
+        y_bar = top + plot_h - bar_h
+        parts.append(
+            f'<rect x="{x:.2f}" y="{y_bar:.2f}" width="{bar_w:.2f}" height="{bar_h:.2f}" '
+            f'fill="{_COLORS[i % len(_COLORS)]}" opacity="0.85">'
+            f'<title>PC{i + 1}: {v:.1%}</title></rect>'
+        )
+        parts.append(
+            f'<text x="{sx(i):.2f}" y="{top + plot_h + 18}" text-anchor="middle" '
+            f'font-family="system-ui,sans-serif" font-size="11" fill="#374151">PC{i + 1}</text>'
+        )
+    # cumulative line
+    line_pts = " ".join(f"{sx(i):.2f},{sy(c):.2f}" for i, c in enumerate(cumulative))
+    parts.append(
+        f'<polyline points="{line_pts}" fill="none" stroke="#111827" stroke-width="2" '
+        'stroke-dasharray="5 3" stroke-linejoin="round"/>'
+    )
+    for i, c in enumerate(cumulative):
+        parts.append(
+            f'<circle cx="{sx(i):.2f}" cy="{sy(c):.2f}" r="4" fill="#111827">'
+            f'<title>Cumulative PC{i + 1}: {c:.1%}</title></circle>'
+        )
+    # axes
+    parts.extend([
+        f'<line x1="{left}" y1="{top + plot_h}" x2="{left + plot_w}" y2="{top + plot_h}" stroke="#111827"/>',
+        f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" stroke="#111827"/>',
+        f'<text x="{left + plot_w / 2:.2f}" y="{height - 20}" text-anchor="middle" '
+        'font-family="system-ui,sans-serif" font-size="13" fill="#111827">Component</text>',
+        f'<text x="18" y="{top + plot_h / 2:.2f}" text-anchor="middle" '
+        f'transform="rotate(-90 18 {top + plot_h / 2:.2f})" '
+        'font-family="system-ui,sans-serif" font-size="13" fill="#111827">Explained variance ratio</text>',
+        # legend
+        f'<line x1="{left + plot_w - 160}" y1="48" x2="{left + plot_w - 140}" y2="48" '
+        'stroke="#111827" stroke-width="2" stroke-dasharray="5 3"/>',
+        f'<text x="{left + plot_w - 134}" y="52" font-family="system-ui,sans-serif" '
+        'font-size="11" fill="#374151">Cumulative</text>',
+        "</svg>",
+    ])
+    return "".join(parts)
+
+
+def _per_wavelength_fstat(
+    signals: Any, labels: Sequence[Any]
+) -> np.ndarray | None:
+    """One-way F-statistic per wavelength column across labeled groups.
+
+    Returns None when fewer than 2 distinct groups are present or inputs are invalid.
+    Uses scipy.stats.f_oneway (scipy is a declared project dependency).
+    """
+    try:
+        arr = np.asarray(signals, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if arr.ndim != 2 or arr.shape[0] < 2:
+        return None
+    label_seq = list(labels)
+    if len(label_seq) != arr.shape[0]:
+        return None
+    unique_groups = sorted(set(label_seq))
+    if len(unique_groups) < 2:
+        return None
+    groups = [arr[np.array([i for i, lbl in enumerate(label_seq) if lbl == g])] for g in unique_groups]
+    # each group must have >=1 sample; f_oneway needs at least one per group
+    if any(g.shape[0] == 0 for g in groups):
+        return None
+    f_stats = np.empty(arr.shape[1], dtype=float)
+    for col in range(arr.shape[1]):
+        col_groups = [g[:, col] for g in groups]
+        result_f = f_oneway(*col_groups)
+        f_val = float(result_f.statistic)
+        f_stats[col] = f_val if math.isfinite(f_val) else 0.0
+    return f_stats
+
+
 def _write_svg(store: ProjectStore, relative: str, svg: str) -> Path:
     return store.write_bytes(relative, (svg + "\n").encode("utf-8"))
 
@@ -729,6 +850,56 @@ def _task_tables_and_figures(
             ),
             "Descriptive PCA scores",
         )
+        # PCA scree plot — skip cleanly when explained_variance_ratio absent
+        evr = pca.get("explained_variance_ratio")
+        if evr:
+            figure(
+                "pca-scree.svg",
+                _scree_svg(evr, title="PCA scree plot"),
+                "PCA scree plot",
+            )
+        # PCA loadings plot — skip cleanly when components/axis absent
+        components = pca.get("components")
+        pca_axis = pca.get("axis")
+        if components and pca_axis:
+            pca_axis_v = _finite_vector(pca_axis)
+            if pca_axis_v is not None:
+                loadings_series = []
+                for comp_idx, loadings in enumerate(components):
+                    loadings_v = _finite_vector(loadings)
+                    if loadings_v is not None and len(loadings_v) == len(pca_axis_v):
+                        loadings_series.append({
+                            "label": f"PC{comp_idx + 1}",
+                            "x": pca_axis_v,
+                            "y": loadings_v,
+                        })
+                figure(
+                    "pca-loadings.svg",
+                    _line_svg(
+                        loadings_series,
+                        title="PCA component loadings",
+                        x_label="Wavenumber / wavelength",
+                        y_label="Loading value",
+                    ),
+                    "PCA component loadings",
+                )
+        # Per-wavelength F-statistic — skip cleanly when <2 groups or signals absent
+        pca_signals = pca.get("signals")
+        pca_labels = pca.get("labels")
+        if pca_signals and pca_labels and pca_axis:
+            pca_axis_v = _finite_vector(pca_axis)
+            fstats = _per_wavelength_fstat(pca_signals, pca_labels)
+            if fstats is not None and pca_axis_v is not None and len(fstats) == len(pca_axis_v):
+                figure(
+                    "per-wavelength-fstat.svg",
+                    _line_svg(
+                        [{"label": "F-statistic", "x": pca_axis_v, "y": fstats}],
+                        title="Per-wavelength F-statistic (group discrimination)",
+                        x_label="Wavenumber / wavelength",
+                        y_label="F-statistic",
+                    ),
+                    "Per-wavelength F-statistic",
+                )
 
     evaluation = task_result.get("evaluation")
     if isinstance(evaluation, Mapping):

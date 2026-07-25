@@ -31,6 +31,38 @@ def test_mixture_requires_named_references_and_stays_screening() -> None:
     assert "raw_coefficients" in result["mixture_screening"]
 
 
+def test_pca_result_includes_loadings_evr_axis_signals_labels() -> None:
+    """PCA task result now emits explained_variance_ratio, components, axis, signals, labels."""
+    specs = [
+        measurement("a", [90, 80, 70, 60]),
+        measurement("b", [80, 70, 60, 50]),
+        measurement("c", [70, 60, 50, 40]),
+    ]
+    result = run_ftir_nir_task(specs, "pca")
+    pca = result["pca"]
+    # Original fields still present
+    assert pca["scan_count"] == 3
+    assert "chemical identity" in pca["label"]
+    assert len(pca["scores"]) == 3
+    # New fields
+    evr = pca["explained_variance_ratio"]
+    assert isinstance(evr, list) and len(evr) >= 1
+    assert all(isinstance(v, float) for v in evr)
+    assert abs(sum(evr) - 1.0) < 1e-6 or sum(evr) <= 1.0  # <=1 sum for partial components
+    components = pca["components"]
+    assert isinstance(components, list) and len(components) >= 1
+    assert all(isinstance(row, list) and len(row) == 4 for row in components)  # 4 features
+    axis = pca["axis"]
+    assert isinstance(axis, list) and len(axis) == 4
+    assert axis == [1000.0, 1001.0, 1002.0, 1003.0]
+    signals = pca["signals"]
+    assert isinstance(signals, list) and len(signals) == 3
+    assert all(len(row) == 4 for row in signals)
+    labels = pca["labels"]
+    assert isinstance(labels, list) and len(labels) == 3
+    assert all(isinstance(lbl, str) for lbl in labels)
+
+
 def test_modality_and_signal_semantics_are_explicit() -> None:
     bad = measurement("bad", [1, 2, 3, 4], modality="uv_vis")
     assert any(

@@ -110,8 +110,21 @@ def run_ftir_nir_task(measurements: Sequence[Mapping[str, Any]], task_type: str 
             if not all(axis == axes[0] for axis in axes[1:]):
                 result["issues"].append(_issue("pca_alignment_required", "PCA requires explicitly aligned spectra.", "advisory"))
             else:
-                scores = PCA(n_components=min(2, len(prepared), len(axes[0])), random_state=0).fit_transform(np.asarray([item["signal"] for item in prepared]))
-                result["pca"] = {"scores": scores.tolist(), "label": "descriptive scan-level PCA; no chemical identity claim", "scan_count": len(prepared), "preparation_count": result["counts"]["preparation_count"]}
+                n_components = min(2, len(prepared), len(axes[0]))
+                pca_model = PCA(n_components=n_components, random_state=0)
+                signals_matrix = np.asarray([item["signal"] for item in prepared])
+                scores = pca_model.fit_transform(signals_matrix)
+                result["pca"] = {
+                    "scores": scores.tolist(),
+                    "label": "descriptive scan-level PCA; no chemical identity claim",
+                    "scan_count": len(prepared),
+                    "preparation_count": result["counts"]["preparation_count"],
+                    "explained_variance_ratio": pca_model.explained_variance_ratio_.tolist(),
+                    "components": pca_model.components_.tolist(),
+                    "axis": list(axes[0]),
+                    "signals": signals_matrix.tolist(),
+                    "labels": [str(item["measurement"].get("role", "sample")) for item in prepared],
+                }
     if task_type in {"mixture", "mixture_quantification"}:
         references = [item for item in prepared if str(item["measurement"].get("role", "")).lower() in {"reference", "calibration"} and item["measurement"].get("reference_name")]
         mixtures = [item for item in prepared if item not in references]
